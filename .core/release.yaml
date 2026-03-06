@@ -1,0 +1,20 @@
+version: 1
+
+project:
+  name: go-cache
+  repository: core/go-cache
+
+publishers: []
+
+changelog:
+  include:
+    - feat
+    - fix
+    - perf
+    - refactor
+  exclude:
+    - chore
+    - docs
+    - style
+    - test
+    - ci
