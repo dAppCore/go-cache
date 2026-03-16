@@ -5,11 +5,11 @@ import (
 	"time"
 
 	"forge.lthn.ai/core/go-cache"
-	"forge.lthn.ai/core/go-io"
+	coreio "forge.lthn.ai/core/go-io"
 )
 
 func TestCache(t *testing.T) {
-	m := io.NewMockMedium()
+	m := coreio.NewMockMedium()
 	// Use a path that MockMedium will understand
 	baseDir := "/tmp/cache"
 	c, err := cache.New(m, baseDir, 1*time.Minute)

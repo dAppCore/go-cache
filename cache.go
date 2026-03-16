@@ -4,13 +4,13 @@ package cache
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"forge.lthn.ai/core/go-io"
+	coreio "forge.lthn.ai/core/go-io"
+	coreerr "forge.lthn.ai/core/go-log"
 )
 
 // DefaultTTL is the default cache expiry time.
@@ -18,7 +18,7 @@ const DefaultTTL = 1 * time.Hour
 
 // Cache represents a file-based cache.
 type Cache struct {
-	medium  io.Medium
+	medium  coreio.Medium
 	baseDir string
 	ttl     time.Duration
 }
@@ -31,18 +31,18 @@ type Entry struct {
 }
 
 // New creates a new cache instance.
-// If medium is nil, uses io.Local (filesystem).
+// If medium is nil, uses coreio.Local (filesystem).
 // If baseDir is empty, uses .core/cache in current directory.
-func New(medium io.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
+func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
 	if medium == nil {
-		medium = io.Local
+		medium = coreio.Local
 	}
 
 	if baseDir == "" {
 		// Use .core/cache in current working directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return nil, err
+			return nil, coreerr.E("cache.New", "failed to get working directory", err)
 		}
 		baseDir = filepath.Join(cwd, ".core", "cache")
 	}
@@ -53,7 +53,7 @@ func New(medium io.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
 
 	// Ensure cache directory exists
 	if err := medium.EnsureDir(baseDir); err != nil {
-		return nil, err
+		return nil, coreerr.E("cache.New", "failed to create cache directory", err)
 	}
 
 	return &Cache{
@@ -71,15 +71,15 @@ func (c *Cache) Path(key string) (string, error) {
 	// Ensure the resulting path is still within baseDir to prevent traversal attacks
 	absBase, err := filepath.Abs(c.baseDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to get absolute path for baseDir: %w", err)
+		return "", coreerr.E("cache.Path", "failed to get absolute path for baseDir", err)
 	}
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to get absolute path for key: %w", err)
+		return "", coreerr.E("cache.Path", "failed to get absolute path for key", err)
 	}
 
 	if !strings.HasPrefix(absPath, absBase) {
-		return "", fmt.Errorf("invalid cache key: path traversal attempt")
+		return "", coreerr.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 	}
 
 	return path, nil
@@ -97,7 +97,7 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, err
+		return false, coreerr.E("cache.Get", "failed to read cache file", err)
 	}
 
 	var entry Entry
@@ -113,7 +113,7 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 
 	// Unmarshal the actual data
 	if err := json.Unmarshal(entry.Data, dest); err != nil {
-		return false, err
+		return false, coreerr.E("cache.Get", "failed to unmarshal cached data", err)
 	}
 
 	return true, nil
@@ -128,13 +128,13 @@ func (c *Cache) Set(key string, data any) error {
 
 	// Ensure parent directory exists
 	if err := c.medium.EnsureDir(filepath.Dir(path)); err != nil {
-		return err
+		return coreerr.E("cache.Set", "failed to create directory", err)
 	}
 
 	// Marshal the data
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return coreerr.E("cache.Set", "failed to marshal data", err)
 	}
 
 	entry := Entry{
@@ -145,10 +145,13 @@ func (c *Cache) Set(key string, data any) error {
 
 	entryBytes, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		return err
+		return coreerr.E("cache.Set", "failed to marshal cache entry", err)
 	}
 
-	return c.medium.Write(path, string(entryBytes))
+	if err := c.medium.Write(path, string(entryBytes)); err != nil {
+		return coreerr.E("cache.Set", "failed to write cache file", err)
+	}
+	return nil
 }
 
 // Delete removes an item from the cache.
@@ -162,12 +165,18 @@ func (c *Cache) Delete(key string) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return coreerr.E("cache.Delete", "failed to delete cache file", err)
+	}
+	return nil
 }
 
 // Clear removes all cached items.
 func (c *Cache) Clear() error {
-	return c.medium.DeleteAll(c.baseDir)
+	if err := c.medium.DeleteAll(c.baseDir); err != nil {
+		return coreerr.E("cache.Clear", "failed to clear cache", err)
+	}
+	return nil
 }
 
 // Age returns how old a cached item is, or -1 if not cached.

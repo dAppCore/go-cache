@@ -2,6 +2,7 @@ module forge.lthn.ai/core/go-cache
 
 go 1.26.0
 
-require forge.lthn.ai/core/go-io v0.0.3
-
-require forge.lthn.ai/core/go-log v0.0.1 // indirect
+require (
+	forge.lthn.ai/core/go-io v0.0.3
+	forge.lthn.ai/core/go-log v0.0.1
+)
