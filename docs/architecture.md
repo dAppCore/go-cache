@@ -179,7 +179,7 @@ paths, then checks that the result is still a prefix of the base:
 
 ```go
 if !strings.HasPrefix(absPath, absBase) {
-    return "", fmt.Errorf("invalid cache key: path traversal attempt")
+    return "", coreerr.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 }
 ```
 
