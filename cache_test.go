@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"forge.lthn.ai/core/go-cache"
-	coreio "forge.lthn.ai/core/go-io"
+	"dappco.re/go/core/cache"
+	coreio "dappco.re/go/core/io"
 )
 
 func TestCache(t *testing.T) {
