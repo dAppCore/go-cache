@@ -1,4 +1,4 @@
-// Package cache provides a file-based cache for GitHub API responses.
+// Package cache provides a storage-agnostic, JSON-based cache backed by any io.Medium.
 package cache
 
 import (
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	coreio "forge.lthn.ai/core/go-io"
-	coreerr "forge.lthn.ai/core/go-log"
+	coreio "dappco.re/go/core/io"
+	coreerr "dappco.re/go/core/log"
 )
 
 // DefaultTTL is the default cache expiry time.
@@ -78,7 +78,7 @@ func (c *Cache) Path(key string) (string, error) {
 		return "", coreerr.E("cache.Path", "failed to get absolute path for key", err)
 	}
 
-	if !strings.HasPrefix(absPath, absBase) {
+	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
 		return "", coreerr.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 	}
 
