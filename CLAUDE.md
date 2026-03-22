@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`go-cache` is a storage-agnostic, JSON-based caching library for Go. Module path: `forge.lthn.ai/core/go-cache`. The entire package is two files: `cache.go` and `cache_test.go`.
+`go-cache` is a storage-agnostic, JSON-based caching library for Go. Module path: `dappco.re/go/core/cache`. The entire package is two files: `cache.go` and `cache_test.go`.
 
 ## Commands
 
@@ -31,7 +31,7 @@ core go cov --open
 
 ## Key Architecture Details
 
-- All I/O is delegated to the `io.Medium` interface from `forge.lthn.ai/core/go-io` — the cache never reads/writes files directly. This makes it backend-swappable (local FS, SQLite, S3, in-memory mock).
+- All I/O is delegated to the `io.Medium` interface from `dappco.re/go/core/io` — the cache never reads/writes files directly. This makes it backend-swappable (local FS, SQLite, S3, in-memory mock).
 - `Cache.Path()` enforces path-traversal protection on every public method — keys like `../../etc/passwd` are rejected before any I/O occurs.
 - Expired entries are not eagerly deleted; they remain on disk until overwritten or explicitly removed.
 - The struct has no mutex. Concurrent reads are safe, but concurrent writes to the same key need external synchronization.
@@ -49,5 +49,5 @@ Conventional commits: `feat(cache):`, `fix(cache):`, `refactor:`, etc. The relea
 ## Environment
 
 - Go 1.26+
-- Private modules: `GOPRIVATE=forge.lthn.ai/*`
+- Private modules: `GOPRIVATE=dappco.re/*,forge.lthn.ai/*`
 - Licence: EUPL-1.2
