@@ -102,3 +102,28 @@ func TestCacheDefaults(t *testing.T) {
 		t.Fatal("expected cache instance")
 	}
 }
+
+func TestGitHubKeys(t *testing.T) {
+	key := cache.GitHubReposKey("myorg")
+	if key != "github/myorg/repos" {
+		t.Errorf("unexpected GitHubReposKey: %q", key)
+	}
+
+	key = cache.GitHubRepoKey("myorg", "myrepo")
+	if key != "github/myorg/myrepo/meta" {
+		t.Errorf("unexpected GitHubRepoKey: %q", key)
+	}
+}
+
+func TestPathTraversalRejected(t *testing.T) {
+	m := coreio.NewMockMedium()
+	c, err := cache.New(m, "/tmp/cache-traversal", 1*time.Minute)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+
+	_, err = c.Path("../../etc/passwd")
+	if err == nil {
+		t.Error("expected error for path traversal key, got nil")
+	}
+}
