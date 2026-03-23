@@ -162,11 +162,11 @@ the GitHub key helpers work:
 
 ```go
 func GitHubReposKey(org string) string {
-    return filepath.Join("github", org, "repos")
+    return core.JoinPath("github", org, "repos")
 }
 
 func GitHubRepoKey(org, repo string) string {
-    return filepath.Join("github", org, repo, "meta")
+    return core.JoinPath("github", org, repo, "meta")
 }
 ```
 
@@ -178,7 +178,7 @@ the full path, it resolves both the base directory and the result to absolute
 paths, then checks that the result is still a prefix of the base:
 
 ```go
-if !strings.HasPrefix(absPath, absBase) {
+if !core.HasPrefix(absPath, absBase+pathSeparator()) && absPath != absBase {
     return "", coreerr.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 }
 ```
