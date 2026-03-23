@@ -3,6 +3,7 @@ module dappco.re/go/core/cache
 go 1.26.0
 
 require (
+	dappco.re/go/core v0.6.0
 	dappco.re/go/core/io v0.2.0
 	dappco.re/go/core/log v0.1.0
 )
