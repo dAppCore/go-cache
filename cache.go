@@ -5,7 +5,6 @@ package cache
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"time"
 
@@ -119,7 +118,7 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 
 	dataStr, err := c.medium.Read(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if core.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, coreerr.E("cache.Get", "failed to read cache file", err)
@@ -195,7 +194,7 @@ func (c *Cache) Delete(key string) error {
 	}
 
 	err = c.medium.Delete(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if core.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
