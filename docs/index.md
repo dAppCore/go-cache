@@ -1,6 +1,6 @@
 ---
 title: go-cache
-description: File-based caching with TTL expiry, storage-agnostic via the go-io Medium interface.
+description: Storage-agnostic caching with TTL expiry via the core/io Medium interface.
 ---
 
 # go-cache
@@ -8,7 +8,7 @@ description: File-based caching with TTL expiry, storage-agnostic via the go-io 
 `go-cache` is a lightweight, storage-agnostic caching library for Go. It stores
 JSON-serialised entries with automatic TTL expiry and path-traversal protection.
 
-**Module path:** `forge.lthn.ai/core/go-cache`
+**Module path:** `dappco.re/go/core/cache`
 
 **Licence:** EUPL-1.2
 
@@ -20,7 +20,7 @@ import (
     "fmt"
     "time"
 
-    "forge.lthn.ai/core/go-cache"
+    "dappco.re/go/core/cache"
 )
 
 func main() {
@@ -68,11 +68,11 @@ func main() {
 
 | Module                        | Version | Role                                       |
 |-------------------------------|---------|---------------------------------------------|
-| `forge.lthn.ai/core/go-io`   | v0.0.3  | Storage abstraction (`Medium` interface)    |
-| `forge.lthn.ai/core/go-log`  | v0.0.1  | Structured logging (indirect, via `go-io`)  |
+| `dappco.re/go/core/io`  | v0.2.0  | Storage abstraction (`Medium` interface)       |
+| `dappco.re/go/core/log` | v0.1.0  | Structured error wrapping used by the package  |
 
 There are no other runtime dependencies. The test suite uses the standard
-library only (plus the `MockMedium` from `go-io`).
+library only (plus the `MockMedium` from `core/io`).
 
 
 ## Key Concepts
@@ -80,12 +80,12 @@ library only (plus the `MockMedium` from `go-io`).
 ### Storage Backends
 
 The cache does not read or write files directly. All I/O goes through the
-`io.Medium` interface defined in `go-io`. This means the same cache logic works
+`io.Medium` interface defined in `core/io`. This means the same cache logic works
 against:
 
 - **Local filesystem** (`io.Local`) -- the default
-- **SQLite KV store** (`store.Medium` from `go-io/store`)
-- **S3-compatible storage** (`go-io/s3`)
+- **SQLite KV store** (`store.Medium` from `dappco.re/go/core/io/store`)
+- **S3-compatible storage** (`dappco.re/go/core/io/s3`)
 - **In-memory mock** (`io.NewMockMedium()`) -- ideal for tests
 
 Pass any `Medium` implementation as the first argument to `cache.New()`.
@@ -107,5 +107,5 @@ cache.GitHubReposKey("host-uk")          // "github/host-uk/repos"
 cache.GitHubRepoKey("host-uk", "core")   // "github/host-uk/core/meta"
 ```
 
-These are convenience helpers used by other packages in the ecosystem (such as
-`go-devops`) to avoid key duplication when caching GitHub responses.
+These are convenience helpers used by other packages in the ecosystem to avoid
+key duplication when caching GitHub responses.

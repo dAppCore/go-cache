@@ -16,23 +16,22 @@ import (
 // DefaultTTL is the default cache expiry time.
 const DefaultTTL = 1 * time.Hour
 
-// Cache represents a file-based cache.
+// Cache stores JSON-encoded entries in a Medium-backed cache rooted at baseDir.
 type Cache struct {
 	medium  coreio.Medium
 	baseDir string
 	ttl     time.Duration
 }
 
-// Entry represents a cached item with metadata.
+// Entry is the serialized cache record written to the backing Medium.
 type Entry struct {
 	Data      json.RawMessage `json:"data"`
 	CachedAt  time.Time       `json:"cached_at"`
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
-// New creates a new cache instance.
-// If medium is nil, uses coreio.Local (filesystem).
-// If baseDir is empty, uses .core/cache in current directory.
+// New creates a cache and applies default Medium, base directory, and TTL values
+// when callers pass zero values.
 func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
 	if medium == nil {
 		medium = coreio.Local
@@ -63,8 +62,8 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 	}, nil
 }
 
-// Path returns the full path for a cache key.
-// Returns an error if the key attempts path traversal.
+// Path returns the storage path used for key and rejects path traversal
+// attempts.
 func (c *Cache) Path(key string) (string, error) {
 	path := filepath.Join(c.baseDir, key+".json")
 
@@ -85,7 +84,7 @@ func (c *Cache) Path(key string) (string, error) {
 	return path, nil
 }
 
-// Get retrieves a cached item if it exists and hasn't expired.
+// Get unmarshals the cached item into dest if it exists and has not expired.
 func (c *Cache) Get(key string, dest any) (bool, error) {
 	path, err := c.Path(key)
 	if err != nil {
@@ -119,7 +118,7 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 	return true, nil
 }
 
-// Set stores an item in the cache.
+// Set marshals data and stores it in the cache.
 func (c *Cache) Set(key string, data any) error {
 	path, err := c.Path(key)
 	if err != nil {
@@ -154,7 +153,7 @@ func (c *Cache) Set(key string, data any) error {
 	return nil
 }
 
-// Delete removes an item from the cache.
+// Delete removes the cached item for key.
 func (c *Cache) Delete(key string) error {
 	path, err := c.Path(key)
 	if err != nil {
@@ -171,7 +170,7 @@ func (c *Cache) Delete(key string) error {
 	return nil
 }
 
-// Clear removes all cached items.
+// Clear removes all cached items under the cache base directory.
 func (c *Cache) Clear() error {
 	if err := c.medium.DeleteAll(c.baseDir); err != nil {
 		return coreerr.E("cache.Clear", "failed to clear cache", err)
@@ -179,7 +178,7 @@ func (c *Cache) Clear() error {
 	return nil
 }
 
-// Age returns how old a cached item is, or -1 if not cached.
+// Age reports how long ago key was cached, or -1 if it is missing or unreadable.
 func (c *Cache) Age(key string) time.Duration {
 	path, err := c.Path(key)
 	if err != nil {
@@ -201,12 +200,12 @@ func (c *Cache) Age(key string) time.Duration {
 
 // GitHub-specific cache keys
 
-// GitHubReposKey returns the cache key for an org's repo list.
+// GitHubReposKey returns the cache key used for an organisation's repo list.
 func GitHubReposKey(org string) string {
 	return filepath.Join("github", org, "repos")
 }
 
-// GitHubRepoKey returns the cache key for a specific repo's metadata.
+// GitHubRepoKey returns the cache key used for a repository metadata entry.
 func GitHubRepoKey(org, repo string) string {
 	return filepath.Join("github", org, repo, "meta")
 }

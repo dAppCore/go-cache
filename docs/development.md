@@ -11,16 +11,14 @@ This guide covers how to build, test, and contribute to `go-cache`.
 ## Prerequisites
 
 - **Go 1.26** or later
-- Access to `forge.lthn.ai` modules (`GOPRIVATE=forge.lthn.ai/*`)
+- Access to private modules (`GOPRIVATE=dappco.re/*,forge.lthn.ai/*`)
 - The `core` CLI (optional, for `core go test` and `core go qa`)
 
 
 ## Getting the Source
 
-```bash
-git clone ssh://git@forge.lthn.ai:2223/core/go-cache.git
-cd go-cache
-```
+Clone the repository from your configured remote, then use the
+`dappco.re/go/core/cache` module path in code and `go get` operations.
 
 If you are working within the Go workspace at `~/Code/go.work`, the module is
 already available locally and dependency resolution will use workspace overrides.
@@ -104,7 +102,7 @@ Tests follow the standard Go testing conventions. The codebase uses
 
 1. Use `io.NewMockMedium()` rather than the real filesystem.
 2. Keep TTLs short (milliseconds) when testing expiry behaviour.
-3. Name test functions descriptively: `TestCacheExpiry`, `TestCacheDefaults`, etc.
+3. Name test functions descriptively: `TestCacheExpiry`, `TestCacheUsesDefaultBaseDirAndTTL`, etc.
 
 Example of testing cache expiry:
 
@@ -168,9 +166,10 @@ the [architecture](architecture.md) document for the full method mapping.
 
 ```go
 import (
-    "forge.lthn.ai/core/go-cache"
-    "forge.lthn.ai/core/go-io/store"
     "time"
+
+    "dappco.re/go/core/cache"
+    "dappco.re/go/core/io/store"
 )
 
 // Use SQLite as the cache backend
