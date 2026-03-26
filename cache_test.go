@@ -1,11 +1,10 @@
 package cache_test
 
 import (
-	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"dappco.re/go/core"
 	"dappco.re/go/core/cache"
 	coreio "dappco.re/go/core/io"
 )
@@ -22,7 +21,75 @@ func newTestCache(t *testing.T, baseDir string, ttl time.Duration) (*cache.Cache
 	return c, m
 }
 
-func TestCacheSetAndGet(t *testing.T) {
+func readEntry(t *testing.T, raw string) cache.Entry {
+	t.Helper()
+
+	var entry cache.Entry
+	result := core.JSONUnmarshalString(raw, &entry)
+	if !result.OK {
+		t.Fatalf("failed to unmarshal cache entry: %v", result.Value)
+	}
+
+	return entry
+}
+
+func TestCache_New_Good(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	c, m := newTestCache(t, "", 0)
+
+	const key = "defaults"
+	if err := c.Set(key, map[string]string{"foo": "bar"}); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	path, err := c.Path(key)
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+
+	wantPath := core.JoinPath(tmpDir, ".core", "cache", key+".json")
+	if path != wantPath {
+		t.Fatalf("expected default path %q, got %q", wantPath, path)
+	}
+
+	raw, err := m.Read(path)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	entry := readEntry(t, raw)
+	ttl := entry.ExpiresAt.Sub(entry.CachedAt)
+	if ttl < cache.DefaultTTL || ttl > cache.DefaultTTL+time.Second {
+		t.Fatalf("expected ttl near %v, got %v", cache.DefaultTTL, ttl)
+	}
+}
+
+func TestCache_Path_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-path", time.Minute)
+
+	path, err := c.Path("github/acme/repos")
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+
+	want := "/tmp/cache-path/github/acme/repos.json"
+	if path != want {
+		t.Fatalf("expected path %q, got %q", want, path)
+	}
+}
+
+func TestCache_Path_Bad(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-traversal", time.Minute)
+
+	_, err := c.Path("../../etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for path traversal key, got nil")
+	}
+}
+
+func TestCache_Get_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache", time.Minute)
 
 	key := "test-key"
@@ -45,7 +112,26 @@ func TestCacheSetAndGet(t *testing.T) {
 	}
 }
 
-func TestCacheAge(t *testing.T) {
+func TestCache_Get_Ugly(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-expiry", 10*time.Millisecond)
+
+	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
+		t.Fatalf("Set for expiry test failed: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	var retrieved map[string]string
+	found, err := c.Get("test-key", &retrieved)
+	if err != nil {
+		t.Fatalf("Get for expired item returned an unexpected error: %v", err)
+	}
+	if found {
+		t.Error("expected item to be expired")
+	}
+}
+
+func TestCache_Age_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-age", time.Minute)
 
 	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
@@ -57,7 +143,7 @@ func TestCacheAge(t *testing.T) {
 	}
 }
 
-func TestCacheDelete(t *testing.T) {
+func TestCache_Delete_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-delete", time.Minute)
 
 	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
@@ -78,26 +164,7 @@ func TestCacheDelete(t *testing.T) {
 	}
 }
 
-func TestCacheExpiry(t *testing.T) {
-	c, _ := newTestCache(t, "/tmp/cache-expiry", 10*time.Millisecond)
-
-	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
-		t.Fatalf("Set for expiry test failed: %v", err)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	var retrieved map[string]string
-	found, err := c.Get("test-key", &retrieved)
-	if err != nil {
-		t.Fatalf("Get for expired item returned an unexpected error: %v", err)
-	}
-	if found {
-		t.Error("expected item to be expired")
-	}
-}
-
-func TestCacheClear(t *testing.T) {
+func TestCache_Clear_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-clear", time.Minute)
 	data := map[string]string{"foo": "bar"}
 
@@ -121,62 +188,16 @@ func TestCacheClear(t *testing.T) {
 	}
 }
 
-func TestCacheUsesDefaultBaseDirAndTTL(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	c, m := newTestCache(t, "", 0)
-
-	const key = "defaults"
-	if err := c.Set(key, map[string]string{"foo": "bar"}); err != nil {
-		t.Fatalf("Set failed: %v", err)
-	}
-
-	path, err := c.Path(key)
-	if err != nil {
-		t.Fatalf("Path failed: %v", err)
-	}
-
-	wantPath := filepath.Join(tmpDir, ".core", "cache", key+".json")
-	if path != wantPath {
-		t.Fatalf("expected default path %q, got %q", wantPath, path)
-	}
-
-	raw, err := m.Read(path)
-	if err != nil {
-		t.Fatalf("Read failed: %v", err)
-	}
-
-	var entry cache.Entry
-	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-		t.Fatalf("failed to unmarshal cache entry: %v", err)
-	}
-
-	ttl := entry.ExpiresAt.Sub(entry.CachedAt)
-	if ttl < cache.DefaultTTL || ttl > cache.DefaultTTL+time.Second {
-		t.Fatalf("expected ttl near %v, got %v", cache.DefaultTTL, ttl)
-	}
-}
-
-func TestGitHubReposKey(t *testing.T) {
+func TestCache_GitHubReposKey_Good(t *testing.T) {
 	key := cache.GitHubReposKey("myorg")
 	if key != "github/myorg/repos" {
 		t.Errorf("unexpected GitHubReposKey: %q", key)
 	}
 }
 
-func TestGitHubRepoKey(t *testing.T) {
+func TestCache_GitHubRepoKey_Good(t *testing.T) {
 	key := cache.GitHubRepoKey("myorg", "myrepo")
 	if key != "github/myorg/myrepo/meta" {
 		t.Errorf("unexpected GitHubRepoKey: %q", key)
-	}
-}
-
-func TestCacheRejectsPathTraversal(t *testing.T) {
-	c, _ := newTestCache(t, "/tmp/cache-traversal", time.Minute)
-
-	_, err := c.Path("../../etc/passwd")
-	if err == nil {
-		t.Error("expected error for path traversal key, got nil")
 	}
 }
