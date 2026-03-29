@@ -4,6 +4,7 @@
 package cache
 
 import (
+	"encoding/json"
 	"io/fs"
 	"time"
 
@@ -27,7 +28,7 @@ type Cache struct {
 
 // Entry is the serialized cache record written to the backing Medium.
 type Entry struct {
-	Data      any       `json:"data"`
+	Data      json.RawMessage `json:"data"`
 	CachedAt  time.Time `json:"cached_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
@@ -110,12 +111,7 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 		return false, nil
 	}
 
-	dataResult := core.JSONMarshal(entry.Data)
-	if !dataResult.OK {
-		return false, core.E("cache.Get", "failed to marshal cached data", dataResult.Value.(error))
-	}
-
-	if err := core.JSONUnmarshal(dataResult.Value.([]byte), dest); !err.OK {
+	if err := core.JSONUnmarshal(entry.Data, dest); !err.OK {
 		return false, core.E("cache.Get", "failed to unmarshal cached data", err.Value.(error))
 	}
 
@@ -135,8 +131,13 @@ func (c *Cache) Set(key string, data any) error {
 		return core.E("cache.Set", "failed to create directory", err)
 	}
 
+	dataResult := core.JSONMarshal(data)
+	if !dataResult.OK {
+		return core.E("cache.Set", "failed to marshal cache data", dataResult.Value.(error))
+	}
+
 	entry := Entry{
-		Data:      data,
+		Data:      dataResult.Value.([]byte),
 		CachedAt:  time.Now(),
 		ExpiresAt: time.Now().Add(c.ttl),
 	}
