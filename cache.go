@@ -29,8 +29,8 @@ type Cache struct {
 // Entry is the serialized cache record written to the backing Medium.
 type Entry struct {
 	Data      json.RawMessage `json:"data"`
-	CachedAt  time.Time `json:"cached_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	CachedAt  time.Time       `json:"cached_at"`
+	ExpiresAt time.Time       `json:"expires_at"`
 }
 
 // New creates a cache and applies default Medium, base directory, and TTL values
@@ -73,6 +73,10 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 //
 //	path, err := c.Path("github/acme/repos")
 func (c *Cache) Path(key string) (string, error) {
+	if c == nil {
+		return "", core.E("cache.Path", "cache is nil", nil)
+	}
+
 	baseDir := absolutePath(c.baseDir)
 	path := absolutePath(core.JoinPath(baseDir, key+".json"))
 	pathPrefix := normalizePath(core.Concat(baseDir, pathSeparator()))
@@ -88,6 +92,10 @@ func (c *Cache) Path(key string) (string, error) {
 //
 //	found, err := c.Get("github/acme/repos", &repos)
 func (c *Cache) Get(key string, dest any) (bool, error) {
+	if c == nil {
+		return false, core.E("cache.Get", "cache is nil", nil)
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return false, err
@@ -122,6 +130,10 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 //
 //	err := c.Set("github/acme/repos", repos)
 func (c *Cache) Set(key string, data any) error {
+	if c == nil {
+		return core.E("cache.Set", "cache is nil", nil)
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return err
@@ -157,6 +169,10 @@ func (c *Cache) Set(key string, data any) error {
 //
 //	err := c.Delete("github/acme/repos")
 func (c *Cache) Delete(key string) error {
+	if c == nil {
+		return core.E("cache.Delete", "cache is nil", nil)
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return err
@@ -176,6 +192,10 @@ func (c *Cache) Delete(key string) error {
 //
 //	err := c.Clear()
 func (c *Cache) Clear() error {
+	if c == nil {
+		return core.E("cache.Clear", "cache is nil", nil)
+	}
+
 	if err := c.medium.DeleteAll(c.baseDir); err != nil {
 		return core.E("cache.Clear", "failed to clear cache", err)
 	}
@@ -186,6 +206,10 @@ func (c *Cache) Clear() error {
 //
 //	age := c.Age("github/acme/repos")
 func (c *Cache) Age(key string) time.Duration {
+	if c == nil {
+		return -1
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return -1
