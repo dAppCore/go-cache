@@ -68,6 +68,13 @@ func TestCache_New_Good(t *testing.T) {
 	}
 }
 
+func TestCache_New_Bad(t *testing.T) {
+	_, err := cache.New(coreio.NewMockMedium(), "/tmp/cache-negative-ttl", -time.Second)
+	if err == nil {
+		t.Fatal("expected New to reject negative ttl, got nil")
+	}
+}
+
 func TestCache_Path_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-path", time.Minute)
 
@@ -171,6 +178,35 @@ func TestCache_NilReceiver_Good(t *testing.T) {
 
 	if age := c.Age("x"); age != -1 {
 		t.Fatalf("expected Age to return -1 on nil receiver, got %v", age)
+	}
+}
+
+func TestCache_ZeroValue_Ugly(t *testing.T) {
+	var c cache.Cache
+	var target map[string]string
+
+	if _, err := c.Path("x"); err == nil {
+		t.Fatal("expected Path to fail on zero-value cache")
+	}
+
+	if _, err := c.Get("x", &target); err == nil {
+		t.Fatal("expected Get to fail on zero-value cache")
+	}
+
+	if err := c.Set("x", map[string]string{"foo": "bar"}); err == nil {
+		t.Fatal("expected Set to fail on zero-value cache")
+	}
+
+	if err := c.Delete("x"); err == nil {
+		t.Fatal("expected Delete to fail on zero-value cache")
+	}
+
+	if err := c.Clear(); err == nil {
+		t.Fatal("expected Clear to fail on zero-value cache")
+	}
+
+	if age := c.Age("x"); age != -1 {
+		t.Fatalf("expected Age to return -1 on zero-value cache, got %v", age)
 	}
 }
 

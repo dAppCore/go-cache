@@ -53,6 +53,10 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 		baseDir = absolutePath(baseDir)
 	}
 
+	if ttl < 0 {
+		return nil, core.E("cache.New", "ttl must be >= 0", nil)
+	}
+
 	if ttl == 0 {
 		ttl = DefaultTTL
 	}
@@ -73,8 +77,8 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 //
 //	path, err := c.Path("github/acme/repos")
 func (c *Cache) Path(key string) (string, error) {
-	if c == nil {
-		return "", core.E("cache.Path", "cache is nil", nil)
+	if err := c.ensureConfigured("cache.Path"); err != nil {
+		return "", err
 	}
 
 	baseDir := absolutePath(c.baseDir)
@@ -92,8 +96,8 @@ func (c *Cache) Path(key string) (string, error) {
 //
 //	found, err := c.Get("github/acme/repos", &repos)
 func (c *Cache) Get(key string, dest any) (bool, error) {
-	if c == nil {
-		return false, core.E("cache.Get", "cache is nil", nil)
+	if err := c.ensureReady("cache.Get"); err != nil {
+		return false, err
 	}
 
 	path, err := c.Path(key)
@@ -130,8 +134,8 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 //
 //	err := c.Set("github/acme/repos", repos)
 func (c *Cache) Set(key string, data any) error {
-	if c == nil {
-		return core.E("cache.Set", "cache is nil", nil)
+	if err := c.ensureReady("cache.Set"); err != nil {
+		return err
 	}
 
 	path, err := c.Path(key)
@@ -148,10 +152,18 @@ func (c *Cache) Set(key string, data any) error {
 		return core.E("cache.Set", "failed to marshal cache data", dataResult.Value.(error))
 	}
 
+	ttl := c.ttl
+	if ttl < 0 {
+		return core.E("cache.Set", "cache ttl must be >= 0", nil)
+	}
+	if ttl == 0 {
+		ttl = DefaultTTL
+	}
+
 	entry := Entry{
 		Data:      dataResult.Value.([]byte),
 		CachedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(c.ttl),
+		ExpiresAt: time.Now().Add(ttl),
 	}
 
 	entryResult := core.JSONMarshal(entry)
@@ -169,8 +181,8 @@ func (c *Cache) Set(key string, data any) error {
 //
 //	err := c.Delete("github/acme/repos")
 func (c *Cache) Delete(key string) error {
-	if c == nil {
-		return core.E("cache.Delete", "cache is nil", nil)
+	if err := c.ensureReady("cache.Delete"); err != nil {
+		return err
 	}
 
 	path, err := c.Path(key)
@@ -192,8 +204,8 @@ func (c *Cache) Delete(key string) error {
 //
 //	err := c.Clear()
 func (c *Cache) Clear() error {
-	if c == nil {
-		return core.E("cache.Clear", "cache is nil", nil)
+	if err := c.ensureReady("cache.Clear"); err != nil {
+		return err
 	}
 
 	if err := c.medium.DeleteAll(c.baseDir); err != nil {
@@ -206,7 +218,7 @@ func (c *Cache) Clear() error {
 //
 //	age := c.Age("github/acme/repos")
 func (c *Cache) Age(key string) time.Duration {
-	if c == nil {
+	if err := c.ensureReady("cache.Age"); err != nil {
 		return -1
 	}
 
@@ -285,4 +297,26 @@ func currentDir() string {
 	}
 
 	return normalizePath(core.Env("DIR_CWD"))
+}
+
+func (c *Cache) ensureConfigured(op string) error {
+	if c == nil {
+		return core.E(op, "cache is nil", nil)
+	}
+	if c.baseDir == "" {
+		return core.E(op, "cache base directory is empty; construct with cache.New", nil)
+	}
+
+	return nil
+}
+
+func (c *Cache) ensureReady(op string) error {
+	if err := c.ensureConfigured(op); err != nil {
+		return err
+	}
+	if c.medium == nil {
+		return core.E(op, "cache medium is nil; construct with cache.New", nil)
+	}
+
+	return nil
 }
