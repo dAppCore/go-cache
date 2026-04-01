@@ -200,6 +200,32 @@ func (c *Cache) Delete(key string) error {
 	return nil
 }
 
+// DeleteMany removes several cached items in one call.
+//
+//	err := c.DeleteMany("github/acme/repos", "github/acme/meta")
+func (c *Cache) DeleteMany(keys ...string) error {
+	if err := c.ensureReady("cache.DeleteMany"); err != nil {
+		return err
+	}
+
+	for _, key := range keys {
+		path, err := c.Path(key)
+		if err != nil {
+			return err
+		}
+
+		err = c.medium.Delete(path)
+		if core.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return core.E("cache.DeleteMany", "failed to delete cache file", err)
+		}
+	}
+
+	return nil
+}
+
 // Clear removes all cached items under the cache base directory.
 //
 //	err := c.Clear()

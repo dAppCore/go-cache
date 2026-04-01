@@ -235,6 +235,38 @@ func TestCache_Delete_Good(t *testing.T) {
 	}
 }
 
+func TestCache_DeleteMany_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-delete-many", time.Minute)
+	data := map[string]string{"foo": "bar"}
+
+	if err := c.Set("key1", data); err != nil {
+		t.Fatalf("Set failed for key1: %v", err)
+	}
+	if err := c.Set("key2", data); err != nil {
+		t.Fatalf("Set failed for key2: %v", err)
+	}
+	if err := c.DeleteMany("key1", "missing", "key2"); err != nil {
+		t.Fatalf("DeleteMany failed: %v", err)
+	}
+
+	var retrieved map[string]string
+	found, err := c.Get("key1", &retrieved)
+	if err != nil {
+		t.Fatalf("Get after DeleteMany returned an unexpected error: %v", err)
+	}
+	if found {
+		t.Error("expected key1 to be deleted")
+	}
+
+	found, err = c.Get("key2", &retrieved)
+	if err != nil {
+		t.Fatalf("Get after DeleteMany returned an unexpected error: %v", err)
+	}
+	if found {
+		t.Error("expected key2 to be deleted")
+	}
+}
+
 func TestCache_Clear_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-clear", time.Minute)
 	data := map[string]string{"foo": "bar"}

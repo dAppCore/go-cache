@@ -22,6 +22,7 @@ own usage example in a doc comment or Go example test.
 | `(*Cache).Get` | `func (c *Cache) Get(key string, dest any) (bool, error)` | `dappco.re/go/core/cache` | Retrieves a cached item if it exists and has not expired. | yes | no |
 | `(*Cache).Set` | `func (c *Cache) Set(key string, data any) error` | `dappco.re/go/core/cache` | Stores an item in the cache. | yes | no |
 | `(*Cache).Delete` | `func (c *Cache) Delete(key string) error` | `dappco.re/go/core/cache` | Removes an item from the cache. | yes | no |
+| `(*Cache).DeleteMany` | `func (c *Cache) DeleteMany(keys ...string) error` | `dappco.re/go/core/cache` | Removes several items from the cache in one call. | yes | no |
 | `(*Cache).Clear` | `func (c *Cache) Clear() error` | `dappco.re/go/core/cache` | Removes all cached items. | yes | no |
 | `(*Cache).Age` | `func (c *Cache) Age(key string) time.Duration` | `dappco.re/go/core/cache` | Returns how old a cached item is, or `-1` if it is not cached. | yes | no |
 | `GitHubReposKey` | `func GitHubReposKey(org string) string` | `dappco.re/go/core/cache` | Returns the cache key for an organization's repo list. | yes | no |

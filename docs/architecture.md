@@ -136,6 +136,8 @@ Key behaviours:
 
 - **`Delete(key)`** removes a single entry. If the file does not exist, the
   operation succeeds silently.
+- **`DeleteMany(keys...)`** removes several entries in one call and ignores
+  missing files, using the same per-key path validation as `Delete()`.
 - **`Clear()`** calls `medium.DeleteAll(baseDir)`, removing the entire cache
   directory and all its contents.
 
