@@ -3,6 +3,7 @@
 package cache_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,9 @@ func TestCache_New_Good(t *testing.T) {
 	raw, err := m.Read(path)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
+	}
+	if !strings.Contains(raw, "\n  \"data\":") {
+		t.Fatalf("expected pretty-printed cache entry, got %q", raw)
 	}
 
 	entry := readEntry(t, raw)

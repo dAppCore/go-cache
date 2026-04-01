@@ -166,12 +166,12 @@ func (c *Cache) Set(key string, data any) error {
 		ExpiresAt: time.Now().Add(ttl),
 	}
 
-	entryResult := core.JSONMarshal(entry)
-	if !entryResult.OK {
-		return core.E("cache.Set", "failed to marshal cache entry", entryResult.Value.(error))
+	entryBytes, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return core.E("cache.Set", "failed to marshal cache entry", err)
 	}
 
-	if err := c.medium.Write(path, string(entryResult.Value.([]byte))); err != nil {
+	if err := c.medium.Write(path, string(entryBytes)); err != nil {
 		return core.E("cache.Set", "failed to write cache file", err)
 	}
 	return nil
