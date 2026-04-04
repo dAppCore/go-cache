@@ -136,6 +136,8 @@ Key behaviours:
 
 - **`Delete(key)`** removes a single entry. If the file does not exist, the
   operation succeeds silently.
+- **`DeleteMany(keys...)`** removes several entries in one call and ignores
+  missing files, using the same per-key path validation as `Delete()`.
 - **`Clear()`** calls `medium.DeleteAll(baseDir)`, removing the entire cache
   directory and all its contents.
 
@@ -162,11 +164,11 @@ the GitHub key helpers work:
 
 ```go
 func GitHubReposKey(org string) string {
-    return filepath.Join("github", org, "repos")
+    return core.JoinPath("github", org, "repos")
 }
 
 func GitHubRepoKey(org, repo string) string {
-    return filepath.Join("github", org, repo, "meta")
+    return core.JoinPath("github", org, repo, "meta")
 }
 ```
 
@@ -178,7 +180,7 @@ the full path, it resolves both the base directory and the result to absolute
 paths, then checks that the result is still a prefix of the base:
 
 ```go
-if !strings.HasPrefix(absPath, absBase) {
+if !core.HasPrefix(absPath, absBase+pathSeparator()) && absPath != absBase {
     return "", coreerr.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 }
 ```

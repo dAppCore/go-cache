@@ -1,59 +1,68 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 // Package cache provides a storage-agnostic, JSON-based cache backed by any io.Medium.
 package cache
 
 import (
 	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
-	"strings"
+	"io/fs"
 	"time"
 
+	"dappco.re/go/core"
 	coreio "dappco.re/go/core/io"
-	coreerr "dappco.re/go/core/log"
 )
 
 // DefaultTTL is the default cache expiry time.
+//
+// Usage example:
+//
+//	c, err := cache.New(coreio.NewMockMedium(), "/tmp/cache", cache.DefaultTTL)
 const DefaultTTL = 1 * time.Hour
 
-// Cache represents a file-based cache.
+// Cache stores JSON-encoded entries in a Medium-backed cache rooted at baseDir.
 type Cache struct {
 	medium  coreio.Medium
 	baseDir string
 	ttl     time.Duration
 }
 
-// Entry represents a cached item with metadata.
+// Entry is the serialized cache record written to the backing Medium.
 type Entry struct {
 	Data      json.RawMessage `json:"data"`
 	CachedAt  time.Time       `json:"cached_at"`
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
-// New creates a new cache instance.
-// If medium is nil, uses coreio.Local (filesystem).
-// If baseDir is empty, uses .core/cache in current directory.
+// New creates a cache and applies default Medium, base directory, and TTL values
+// when callers pass zero values.
+//
+//	c, err := cache.New(coreio.Local, "/tmp/cache", time.Hour)
 func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
 	if medium == nil {
 		medium = coreio.Local
 	}
 
 	if baseDir == "" {
-		// Use .core/cache in current working directory
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, coreerr.E("cache.New", "failed to get working directory", err)
+		cwd := currentDir()
+		if cwd == "" || cwd == "." {
+			return nil, core.E("cache.New", "failed to resolve current working directory", nil)
 		}
-		baseDir = filepath.Join(cwd, ".core", "cache")
+
+		baseDir = normalizePath(core.JoinPath(cwd, ".core", "cache"))
+	} else {
+		baseDir = absolutePath(baseDir)
+	}
+
+	if ttl < 0 {
+		return nil, core.E("cache.New", "ttl must be >= 0", nil)
 	}
 
 	if ttl == 0 {
 		ttl = DefaultTTL
 	}
 
-	// Ensure cache directory exists
 	if err := medium.EnsureDir(baseDir); err != nil {
-		return nil, coreerr.E("cache.New", "failed to create cache directory", err)
+		return nil, core.E("cache.New", "failed to create cache directory", err)
 	}
 
 	return &Cache{
@@ -63,30 +72,34 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 	}, nil
 }
 
-// Path returns the full path for a cache key.
-// Returns an error if the key attempts path traversal.
+// Path returns the storage path used for key and rejects path traversal
+// attempts.
+//
+//	path, err := c.Path("github/acme/repos")
 func (c *Cache) Path(key string) (string, error) {
-	path := filepath.Join(c.baseDir, key+".json")
-
-	// Ensure the resulting path is still within baseDir to prevent traversal attacks
-	absBase, err := filepath.Abs(c.baseDir)
-	if err != nil {
-		return "", coreerr.E("cache.Path", "failed to get absolute path for baseDir", err)
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", coreerr.E("cache.Path", "failed to get absolute path for key", err)
+	if err := c.ensureConfigured("cache.Path"); err != nil {
+		return "", err
 	}
 
-	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
-		return "", coreerr.E("cache.Path", "invalid cache key: path traversal attempt", nil)
+	baseDir := absolutePath(c.baseDir)
+	path := absolutePath(core.JoinPath(baseDir, key+".json"))
+	pathPrefix := normalizePath(core.Concat(baseDir, pathSeparator()))
+
+	if path != baseDir && !core.HasPrefix(path, pathPrefix) {
+		return "", core.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 	}
 
 	return path, nil
 }
 
-// Get retrieves a cached item if it exists and hasn't expired.
+// Get unmarshals the cached item into dest if it exists and has not expired.
+//
+//	found, err := c.Get("github/acme/repos", &repos)
 func (c *Cache) Get(key string, dest any) (bool, error) {
+	if err := c.ensureReady("cache.Get"); err != nil {
+		return false, err
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return false, err
@@ -94,93 +107,147 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 
 	dataStr, err := c.medium.Read(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if core.Is(err, fs.ErrNotExist) {
 			return false, nil
 		}
-		return false, coreerr.E("cache.Get", "failed to read cache file", err)
+		return false, core.E("cache.Get", "failed to read cache file", err)
 	}
 
 	var entry Entry
-	if err := json.Unmarshal([]byte(dataStr), &entry); err != nil {
-		// Invalid cache file, treat as miss
+	entryResult := core.JSONUnmarshalString(dataStr, &entry)
+	if !entryResult.OK {
 		return false, nil
 	}
 
-	// Check expiry
 	if time.Now().After(entry.ExpiresAt) {
 		return false, nil
 	}
 
-	// Unmarshal the actual data
-	if err := json.Unmarshal(entry.Data, dest); err != nil {
-		return false, coreerr.E("cache.Get", "failed to unmarshal cached data", err)
+	if err := core.JSONUnmarshal(entry.Data, dest); !err.OK {
+		return false, core.E("cache.Get", "failed to unmarshal cached data", err.Value.(error))
 	}
 
 	return true, nil
 }
 
-// Set stores an item in the cache.
+// Set marshals data and stores it in the cache.
+//
+//	err := c.Set("github/acme/repos", repos)
 func (c *Cache) Set(key string, data any) error {
+	if err := c.ensureReady("cache.Set"); err != nil {
+		return err
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return err
 	}
 
-	// Ensure parent directory exists
-	if err := c.medium.EnsureDir(filepath.Dir(path)); err != nil {
-		return coreerr.E("cache.Set", "failed to create directory", err)
+	if err := c.medium.EnsureDir(core.PathDir(path)); err != nil {
+		return core.E("cache.Set", "failed to create directory", err)
 	}
 
-	// Marshal the data
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		return coreerr.E("cache.Set", "failed to marshal data", err)
+	dataResult := core.JSONMarshal(data)
+	if !dataResult.OK {
+		return core.E("cache.Set", "failed to marshal cache data", dataResult.Value.(error))
+	}
+
+	ttl := c.ttl
+	if ttl < 0 {
+		return core.E("cache.Set", "cache ttl must be >= 0", nil)
+	}
+	if ttl == 0 {
+		ttl = DefaultTTL
 	}
 
 	entry := Entry{
-		Data:      dataBytes,
+		Data:      dataResult.Value.([]byte),
 		CachedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(c.ttl),
+		ExpiresAt: time.Now().Add(ttl),
 	}
 
 	entryBytes, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		return coreerr.E("cache.Set", "failed to marshal cache entry", err)
+		return core.E("cache.Set", "failed to marshal cache entry", err)
 	}
 
 	if err := c.medium.Write(path, string(entryBytes)); err != nil {
-		return coreerr.E("cache.Set", "failed to write cache file", err)
+		return core.E("cache.Set", "failed to write cache file", err)
 	}
 	return nil
 }
 
-// Delete removes an item from the cache.
+// Delete removes the cached item for key.
+//
+//	err := c.Delete("github/acme/repos")
 func (c *Cache) Delete(key string) error {
+	if err := c.ensureReady("cache.Delete"); err != nil {
+		return err
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return err
 	}
 
 	err = c.medium.Delete(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if core.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return coreerr.E("cache.Delete", "failed to delete cache file", err)
+		return core.E("cache.Delete", "failed to delete cache file", err)
 	}
 	return nil
 }
 
-// Clear removes all cached items.
+// DeleteMany removes several cached items in one call.
+//
+//	err := c.DeleteMany("github/acme/repos", "github/acme/meta")
+func (c *Cache) DeleteMany(keys ...string) error {
+	if err := c.ensureReady("cache.DeleteMany"); err != nil {
+		return err
+	}
+
+	for _, key := range keys {
+		path, err := c.Path(key)
+		if err != nil {
+			return err
+		}
+
+		err = c.medium.Delete(path)
+		if core.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return core.E("cache.DeleteMany", "failed to delete cache file", err)
+		}
+	}
+
+	return nil
+}
+
+// Clear removes all cached items under the cache base directory.
+//
+//	err := c.Clear()
 func (c *Cache) Clear() error {
+	if err := c.ensureReady("cache.Clear"); err != nil {
+		return err
+	}
+
 	if err := c.medium.DeleteAll(c.baseDir); err != nil {
-		return coreerr.E("cache.Clear", "failed to clear cache", err)
+		return core.E("cache.Clear", "failed to clear cache", err)
 	}
 	return nil
 }
 
-// Age returns how old a cached item is, or -1 if not cached.
+// Age reports how long ago key was cached, or -1 if it is missing or unreadable.
+//
+//	age := c.Age("github/acme/repos")
 func (c *Cache) Age(key string) time.Duration {
+	if err := c.ensureReady("cache.Age"); err != nil {
+		return -1
+	}
+
 	path, err := c.Path(key)
 	if err != nil {
 		return -1
@@ -192,7 +259,8 @@ func (c *Cache) Age(key string) time.Duration {
 	}
 
 	var entry Entry
-	if err := json.Unmarshal([]byte(dataStr), &entry); err != nil {
+	entryResult := core.JSONUnmarshalString(dataStr, &entry)
+	if !entryResult.OK {
 		return -1
 	}
 
@@ -201,12 +269,80 @@ func (c *Cache) Age(key string) time.Duration {
 
 // GitHub-specific cache keys
 
-// GitHubReposKey returns the cache key for an org's repo list.
+// GitHubReposKey returns the cache key used for an organisation's repo list.
+//
+//	key := cache.GitHubReposKey("acme")
 func GitHubReposKey(org string) string {
-	return filepath.Join("github", org, "repos")
+	return core.JoinPath("github", org, "repos")
 }
 
-// GitHubRepoKey returns the cache key for a specific repo's metadata.
+// GitHubRepoKey returns the cache key used for a repository metadata entry.
+//
+//	key := cache.GitHubRepoKey("acme", "widgets")
 func GitHubRepoKey(org, repo string) string {
-	return filepath.Join("github", org, repo, "meta")
+	return core.JoinPath("github", org, repo, "meta")
+}
+
+func pathSeparator() string {
+	if ds := core.Env("DS"); ds != "" {
+		return ds
+	}
+
+	return "/"
+}
+
+func normalizePath(path string) string {
+	ds := pathSeparator()
+	normalized := core.Replace(path, "\\", ds)
+
+	if ds != "/" {
+		normalized = core.Replace(normalized, "/", ds)
+	}
+
+	return core.CleanPath(normalized, ds)
+}
+
+func absolutePath(path string) string {
+	normalized := normalizePath(path)
+	if core.PathIsAbs(normalized) {
+		return normalized
+	}
+
+	cwd := currentDir()
+	if cwd == "" || cwd == "." {
+		return normalized
+	}
+
+	return normalizePath(core.JoinPath(cwd, normalized))
+}
+
+func currentDir() string {
+	cwd := normalizePath(core.Env("PWD"))
+	if cwd != "" && cwd != "." {
+		return cwd
+	}
+
+	return normalizePath(core.Env("DIR_CWD"))
+}
+
+func (c *Cache) ensureConfigured(op string) error {
+	if c == nil {
+		return core.E(op, "cache is nil", nil)
+	}
+	if c.baseDir == "" {
+		return core.E(op, "cache base directory is empty; construct with cache.New", nil)
+	}
+
+	return nil
+}
+
+func (c *Cache) ensureReady(op string) error {
+	if err := c.ensureConfigured(op); err != nil {
+		return err
+	}
+	if c.medium == nil {
+		return core.E(op, "cache medium is nil; construct with cache.New", nil)
+	}
+
+	return nil
 }
