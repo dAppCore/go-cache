@@ -7,4 +7,4 @@ require (
 	dappco.re/go/core/io v0.2.0
 )
 
-require forge.lthn.ai/core/go-log v0.0.4 // indirect
+require dappco.re/go/core/log v0.0.4 // indirect
