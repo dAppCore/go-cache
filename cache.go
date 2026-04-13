@@ -4,12 +4,12 @@
 package cache
 
 import (
-	"encoding/json"
 	"io/fs"
 	"time"
 
 	"dappco.re/go/core"
 	coreio "dappco.re/go/core/io"
+	"dappco.re/go/core/store"
 )
 
 // DefaultTTL is the default cache expiry time.
@@ -28,7 +28,7 @@ type Cache struct {
 
 // Entry is the serialized cache record written to the backing Medium.
 type Entry struct {
-	Data      json.RawMessage `json:"data"`
+	Data      store.RawMessage `json:"data"`
 	CachedAt  time.Time       `json:"cached_at"`
 	ExpiresAt time.Time       `json:"expires_at"`
 }
@@ -166,7 +166,7 @@ func (c *Cache) Set(key string, data any) error {
 		ExpiresAt: time.Now().Add(ttl),
 	}
 
-	entryBytes, err := json.MarshalIndent(entry, "", "  ")
+	entryBytes, err := store.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return core.E("cache.Set", "failed to marshal cache entry", err)
 	}
