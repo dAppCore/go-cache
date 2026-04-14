@@ -304,3 +304,227 @@ func TestCache_GitHubRepoKey_Good(t *testing.T) {
 		t.Errorf("unexpected GitHubRepoKey: %q", key)
 	}
 }
+
+func TestCache_SetWithTTL_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-set-with-ttl", 10*time.Minute)
+
+	key := "session/short"
+	err := c.SetWithTTL(key, map[string]string{"token": "abc"}, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("SetWithTTL failed: %v", err)
+	}
+
+	var dest map[string]string
+	found, err := c.Get(key, &dest)
+	if err != nil {
+		t.Fatalf("Get before expiry failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected key before expiry")
+	}
+	if dest["token"] != "abc" {
+		t.Fatalf("expected token=abc, got %q", dest["token"])
+	}
+
+	time.Sleep(35 * time.Millisecond)
+	found, err = c.Get(key, &dest)
+	if err != nil {
+		t.Fatalf("Get after expiry failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected key to expire")
+	}
+}
+
+func TestCache_Binary_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary", 10*time.Minute)
+
+	blob := []byte{0x00, 0x01, 0x02, 0x03}
+	err := c.SetBinary("wasm/my-module", blob, "application/wasm")
+	if err != nil {
+		t.Fatalf("SetBinary failed: %v", err)
+	}
+
+	data, found, err := c.GetBinary("wasm/my-module")
+	if err != nil {
+		t.Fatalf("GetBinary failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected binary data")
+	}
+	if string(data) != string(blob) {
+		t.Fatalf("unexpected binary payload: %q", data)
+	}
+}
+
+func TestCache_Binary_WithTTL_Expires(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary-expiry", 10*time.Minute)
+
+	blob := []byte("temporary")
+	if err := c.SetBinaryWithTTL("temp/nonce", blob, "text/plain", 10*time.Millisecond); err != nil {
+		t.Fatalf("SetBinaryWithTTL failed: %v", err)
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	_, found, err := c.GetBinary("temp/nonce")
+	if err != nil {
+		t.Fatalf("GetBinary failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected binary item to expire")
+	}
+}
+
+func TestCache_Scoped_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-scoped", time.Minute)
+
+	app := c.Scoped("https://app.example.com")
+	admin := c.Scoped("https://admin.example.com")
+
+	if err := app.Set("user/profile", "app-user"); err != nil {
+		t.Fatalf("app Set failed: %v", err)
+	}
+	if err := admin.Set("user/profile", "admin-user"); err != nil {
+		t.Fatalf("admin Set failed: %v", err)
+	}
+
+	var appVal string
+	var adminVal string
+
+	found, err := app.Get("user/profile", &appVal)
+	if err != nil || !found || appVal != "app-user" {
+		t.Fatalf("unexpected app scoped value: found=%v val=%q err=%v", found, appVal, err)
+	}
+
+	found, err = admin.Get("user/profile", &adminVal)
+	if err != nil || !found || adminVal != "admin-user" {
+		t.Fatalf("unexpected admin scoped value: found=%v val=%q err=%v", found, adminVal, err)
+	}
+
+	if err := c.ClearScope("https://app.example.com"); err != nil {
+		t.Fatalf("ClearScope failed: %v", err)
+	}
+
+	found, err = app.Get("user/profile", &appVal)
+	if err != nil || found {
+		t.Fatalf("expected app scope to be cleared, found=%v err=%v", found, err)
+	}
+	found, err = admin.Get("user/profile", &adminVal)
+	if err != nil || !found {
+		t.Fatalf("expected admin scope to remain, found=%v err=%v", found, err)
+	}
+}
+
+func TestCache_Invalidate_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-invalidate", time.Minute)
+
+	if err := c.Set("dns/example.com/A", map[string]string{"a": "1"}); err != nil {
+		t.Fatalf("Set dns entry failed: %v", err)
+	}
+	if err := c.Set("config/theme", "dark"); err != nil {
+		t.Fatalf("Set config entry failed: %v", err)
+	}
+
+	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
+		return []string{"dns/*"}
+	})
+	deleted, err := c.Invalidate("dns.tree-root-changed")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted == 0 {
+		t.Fatal("expected at least one deleted entry")
+	}
+
+	var dnsValue map[string]string
+	found, err := c.Get("dns/example.com/A", &dnsValue)
+	if err != nil {
+		t.Fatalf("Get after invalidation failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected dns entry to be deleted")
+	}
+	var theme string
+	found, err = c.Get("config/theme", &theme)
+	if err != nil || !found {
+		t.Fatalf("expected config entry to remain, found=%v err=%v", found, err)
+	}
+}
+
+func TestCache_HTTPCacheStorage_Good(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("my-app-v1")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	resp := cache.CachedResponse{
+		Status:     200,
+		StatusText: "OK",
+		Headers: map[string]string{
+			"Content-Type": "text/css",
+		},
+	}
+
+	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	matched, err := httpCache.Match(req)
+	if err != nil {
+		t.Fatalf("Match failed: %v", err)
+	}
+	if matched == nil {
+		t.Fatalf("expected matched response")
+	}
+
+	body, err := httpCache.ReadBody(matched)
+	if err != nil {
+		t.Fatalf("ReadBody failed: %v", err)
+	}
+	if string(body) != "body" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+
+	urls, err := httpCache.Keys()
+	if err != nil {
+		t.Fatalf("Keys failed: %v", err)
+	}
+	if len(urls) != 1 {
+		t.Fatalf("expected one URL, got %d", len(urls))
+	}
+	if urls[0] != "https://example.com/style.css" {
+		t.Fatalf("unexpected url: %q", urls[0])
+	}
+
+	if err := httpCache.Delete(req); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	matched, err = httpCache.Match(req)
+	if err != nil {
+		t.Fatalf("Match after delete failed: %v", err)
+	}
+	if matched != nil {
+		t.Fatalf("expected response to be deleted")
+	}
+
+	if err := storage.Delete("my-app-v1"); err != nil {
+		t.Fatalf("storage.Delete failed: %v", err)
+	}
+
+	names, err := storage.Keys()
+	if err != nil {
+		t.Fatalf("storage.Keys failed: %v", err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected cache name removed, got %v", strings.Join(names, ","))
+	}
+}
