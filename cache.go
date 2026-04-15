@@ -1025,6 +1025,9 @@ func (hc *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 	if resp.BodyPath == "" {
 		return nil, core.E("cache.HTTPCache.ReadBody", "response has empty body path", nil)
 	}
+	if err := ensureSafeKey(resp.BodyPath); err != nil {
+		return nil, core.E("cache.HTTPCache.ReadBody", "invalid response body path", err)
+	}
 	body, err := hc.medium.Read(hc.storagePath(resp.BodyPath))
 	if err != nil {
 		return nil, core.E("cache.HTTPCache.ReadBody", "failed to read response body", err)

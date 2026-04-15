@@ -536,3 +536,19 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 		t.Fatalf("expected cache name removed, got %v", strings.Join(names, ","))
 	}
 }
+
+func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-body-safety")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("body-safety")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "../../etc/passwd"}); err == nil {
+		t.Fatal("expected ReadBody to reject traversal body paths")
+	}
+}
