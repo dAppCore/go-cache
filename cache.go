@@ -838,7 +838,10 @@ func (cs *CacheStorage) Delete(name string) error {
 
 	delete(cs.caches, name)
 
-	return cs.medium.DeleteAll(core.JoinPath(cs.baseDir, name))
+	if err := cs.medium.DeleteAll(core.JoinPath(cs.baseDir, name)); err != nil && !core.Is(err, fs.ErrNotExist) {
+		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
+	}
+	return nil
 }
 
 // ensureSafeCacheName rejects empty, path-separator, or traversal cache names.
@@ -1044,14 +1047,6 @@ func (hc *HTTPCache) Delete(req CachedRequest) error {
 	key, err := hc.requestKey(req)
 	if err != nil {
 		return err
-	}
-
-	response, err := hc.readResponse(key)
-	if err != nil {
-		return err
-	}
-	if response == nil {
-		return nil
 	}
 
 	if err := hc.medium.Delete(hc.responseMetaPath(key)); err != nil && !core.Is(err, fs.ErrNotExist) {

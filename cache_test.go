@@ -528,12 +528,37 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 		t.Fatalf("storage.Delete failed: %v", err)
 	}
 
+	if err := storage.Delete("my-app-v1"); err != nil {
+		t.Fatalf("storage.Delete on missing cache should be a no-op, got %v", err)
+	}
+
 	names, err = storage.Keys()
 	if err != nil {
 		t.Fatalf("storage.Keys failed: %v", err)
 	}
 	if len(names) != 0 {
 		t.Fatalf("expected cache name removed, got %v", strings.Join(names, ","))
+	}
+}
+
+func TestCache_HTTPCacheDeleteMissing_Good(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-delete-missing")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("missing-delete")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/missing.js",
+		Method: "GET",
+	}
+
+	if err := httpCache.Delete(req); err != nil {
+		t.Fatalf("Delete on missing request should be a no-op, got %v", err)
 	}
 }
 
