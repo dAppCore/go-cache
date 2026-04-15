@@ -275,7 +275,8 @@ func (c *Cache) removeEntryFiles(key string) (bool, error) {
 
 // SetBinary stores raw bytes in a sidecar `.bin` file and metadata in JSON.
 //
-//	err := c.SetBinary("wasm/module", bytes, "application/wasm")
+//	// Store a compiled WASM module
+//	err := c.SetBinary("wasm/my-module", wasmBytes, "application/wasm")
 func (c *Cache) SetBinary(key string, data []byte, contentType string) error {
 	if err := c.ensureReady("cache.SetBinary"); err != nil {
 		return err
@@ -284,6 +285,9 @@ func (c *Cache) SetBinary(key string, data []byte, contentType string) error {
 }
 
 // SetBinaryWithTTL stores raw bytes with a key-specific TTL.
+//
+//	// Short-lived opaque response body
+//	err := c.SetBinaryWithTTL("responses/temp", body, "text/html", 10*time.Minute)
 func (c *Cache) SetBinaryWithTTL(key string, data []byte, contentType string, ttl time.Duration) error {
 	if err := c.ensureReady("cache.SetBinaryWithTTL"); err != nil {
 		return err
@@ -340,7 +344,8 @@ func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.
 
 // GetBinary returns raw binary cache payload.
 //
-//	data, found, err := c.GetBinary("wasm/module")
+//	// data contains the raw bytes when found is true
+//	data, found, err := c.GetBinary("wasm/my-module")
 func (c *Cache) GetBinary(key string) ([]byte, bool, error) {
 	if err := c.ensureReady("cache.GetBinary"); err != nil {
 		return nil, false, err
@@ -796,6 +801,9 @@ func (c *ScopedCache) Age(key string) time.Duration {
 }
 
 // CacheStorage manages named caches for HTTP cache API emulation.
+//
+//	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
+//	appCache, err := storage.Open("my-app-v1")
 type CacheStorage struct {
 	medium  coreio.Medium
 	baseDir string
@@ -803,6 +811,8 @@ type CacheStorage struct {
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
+//
+//	storage, err := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
 func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error) {
 	if medium == nil {
 		medium = coreio.Local
@@ -830,6 +840,8 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 }
 
 // Open retrieves a named HTTPCache.
+//
+//	staticCache, err := storage.Open("static-assets-v2")
 //
 //	api, err := storage.Open("api-responses")
 func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
@@ -859,6 +871,8 @@ func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
 }
 
 // Delete removes a named HTTP cache and all entries.
+//
+//	err := storage.Delete("static-assets-v1")
 //
 //	err := storage.Delete("old-cache")
 func (cs *CacheStorage) Delete(name string) error {
@@ -894,6 +908,7 @@ func ensureSafeCacheName(op, name string) error {
 // Keys lists all named caches.
 //
 //	names, err := storage.Keys()
+//	// ["static-assets-v2", "api-responses"]
 func (cs *CacheStorage) Keys() ([]string, error) {
 	if cs == nil {
 		return nil, core.E("cache.CacheStorage.Keys", "cache storage is nil", nil)
@@ -928,6 +943,9 @@ func (cs *CacheStorage) Keys() ([]string, error) {
 func (cs *CacheStorage) Close() error { return nil }
 
 // HTTPCache stores request/response pairs.
+//
+//	appCache, _ := storage.Open("my-app-v1")
+//	err := appCache.Put(req, resp, body)
 type HTTPCache struct {
 	name    string
 	medium  coreio.Medium
@@ -1003,7 +1021,7 @@ func (hc *HTTPCache) readResponse(key string) (*CachedResponse, error) {
 
 // Match finds a cached response for request.
 //
-//	resp, err := cache.Match(cache.CachedRequest{URL:"https://x", Method:"GET"})
+//	resp, err := cache.Match(cache.CachedRequest{URL: "https://x", Method: "GET"})
 func (hc *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 	if hc == nil {
 		return nil, core.E("cache.HTTPCache.Match", "http cache is nil", nil)
@@ -1017,6 +1035,12 @@ func (hc *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 }
 
 // Put stores request/response pair and response body.
+//
+//	err := appCache.Put(
+//	    cache.CachedRequest{URL: "https://example.com/style.css", Method: "GET"},
+//	    cache.CachedResponse{Status: 200, Headers: headers},
+//	    bodyBytes,
+//	)
 func (hc *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []byte) error {
 	if hc == nil {
 		return core.E("cache.HTTPCache.Put", "http cache is nil", nil)
@@ -1052,6 +1076,8 @@ func (hc *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []byte) er
 }
 
 // ReadBody returns the response body bytes from medium.
+//
+//	body, err := appCache.ReadBody(resp)
 func (hc *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 	if hc == nil {
 		return nil, core.E("cache.HTTPCache.ReadBody", "http cache is nil", nil)
@@ -1073,6 +1099,8 @@ func (hc *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 }
 
 // Delete removes a cached request/response pair.
+//
+//	err := appCache.Delete(cache.CachedRequest{URL: "https://example.com/old.js", Method: "GET"})
 func (hc *HTTPCache) Delete(req CachedRequest) error {
 	if hc == nil {
 		return core.E("cache.HTTPCache.Delete", "http cache is nil", nil)
@@ -1094,6 +1122,9 @@ func (hc *HTTPCache) Delete(req CachedRequest) error {
 }
 
 // Keys returns all cached request URLs.
+//
+//	urls, err := appCache.Keys()
+//	// ["https://example.com/style.css", "https://example.com/app.js"]
 func (hc *HTTPCache) Keys() ([]string, error) {
 	if hc == nil {
 		return nil, core.E("cache.HTTPCache.Keys", "http cache is nil", nil)
