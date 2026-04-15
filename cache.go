@@ -1235,6 +1235,9 @@ func (httpCache *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 	if err := httpCache.ensureReady("cache.HTTPCache.Match"); err != nil {
 		return nil, err
 	}
+	if err := validateCachedRequest(req); err != nil {
+		return nil, core.E("cache.HTTPCache.Match", "invalid cached request", err)
+	}
 	key, err := httpCache.requestKey(req)
 	if err != nil {
 		return nil, err
@@ -1324,6 +1327,10 @@ func (httpCache *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 func validateCachedResponseRecord(key string, record *cachedResponseRecord) error {
 	if record == nil {
 		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached response record is nil", nil)
+	}
+
+	if err := validateCachedRequest(record.Request); err != nil {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "invalid cached request", err)
 	}
 
 	req, err := decodeRequestKey(key)
@@ -1418,6 +1425,9 @@ func isHTTPToken(s string) bool {
 func (httpCache *HTTPCache) Delete(req CachedRequest) error {
 	if err := httpCache.ensureReady("cache.HTTPCache.Delete"); err != nil {
 		return err
+	}
+	if err := validateCachedRequest(req); err != nil {
+		return core.E("cache.HTTPCache.Delete", "invalid cached request", err)
 	}
 
 	key, err := httpCache.requestKey(req)
