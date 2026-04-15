@@ -737,6 +737,32 @@ func TestCache_HTTPCacheStorage_Close_Good(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCacheStorage_Close_AllowsReuse(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-close-reuse")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("reused-cache")
+	if err != nil {
+		t.Fatalf("Open after Close failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/reused",
+		Method: "GET",
+	}
+	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
+
+	if err := httpCache.Put(req, resp, []byte("ok")); err != nil {
+		t.Fatalf("Put after Close failed: %v", err)
+	}
+}
+
 func TestCache_HTTPCacheStorage_DottedName_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-dotted")
 	if err != nil {

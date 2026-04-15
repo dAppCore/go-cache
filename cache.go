@@ -60,10 +60,10 @@ type BinaryMeta struct {
 //	fn := func(trigger string) []string { return []string{"dns/*"} }
 type InvalidateFunc func(trigger string) []string
 
-// New creates a cache and applies default Medium, base directory, and TTL values
-// when callers pass zero values.
+// New creates a cache with explicit storage, root directory, and TTL.
 //
-//	c, err := cache.New(coreio.Local, "/tmp/cache", time.Hour)
+//	c, err := cache.New(coreio.Local, "/tmp/cache", 5*time.Minute)
+//	c, err = cache.New(nil, "", 0) // uses Local, .core/cache, and DefaultTTL
 func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
 	if medium == nil {
 		medium = coreio.Local
@@ -100,10 +100,10 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 	}, nil
 }
 
-// Path returns the storage path used for key and rejects path traversal
-// attempts.
+// Path resolves the on-disk JSON path for a cache key.
 //
 //	path, err := c.Path("github/acme/repos")
+//	// => /tmp/cache/github/acme/repos.json
 func (c *Cache) Path(key string) (string, error) {
 	if err := c.ensureConfigured("cache.Path"); err != nil {
 		return "", err
@@ -162,9 +162,10 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 	return true, nil
 }
 
-// Set marshals data and stores it in the cache.
+// Set stores a value using the cache's default TTL.
 //
 //	err := c.Set("github/acme/repos", repos)
+//	err = c.Set("config/theme", "dark")
 func (c *Cache) Set(key string, data any) error {
 	if err := c.ensureReady("cache.Set"); err != nil {
 		return err
@@ -172,9 +173,10 @@ func (c *Cache) Set(key string, data any) error {
 	return c.set(key, data, c.defaultTTL(), true)
 }
 
-// SetWithTTL stores a value using a key-specific TTL.
+// SetWithTTL stores a value with an explicit TTL override.
 //
 //	err := c.SetWithTTL("dns/example.com/A", records, 5*time.Minute)
+//	err = c.SetWithTTL("session/token", token, 30*time.Second)
 func (c *Cache) SetWithTTL(key string, data any, ttl time.Duration) error {
 	if err := c.ensureReady("cache.SetWithTTL"); err != nil {
 		return err
@@ -226,7 +228,7 @@ func (c *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL bool)
 	return nil
 }
 
-// Delete removes the cached item for key.
+// Delete removes one cached entry.
 //
 //	err := c.Delete("github/acme/repos")
 func (c *Cache) Delete(key string) error {
@@ -241,7 +243,7 @@ func (c *Cache) Delete(key string) error {
 	return err
 }
 
-// Delete removes cache entry files, including binary payload for the same key.
+// removeEntryFiles deletes both the JSON metadata and sidecar binary payload for a key.
 func (c *Cache) removeEntryFiles(key string) (bool, error) {
 	if err := c.ensureReady("cache.removeEntryFiles"); err != nil {
 		return false, err
@@ -275,8 +277,8 @@ func (c *Cache) removeEntryFiles(key string) (bool, error) {
 
 // SetBinary stores raw bytes in a sidecar `.bin` file and metadata in JSON.
 //
-//	// Store a compiled WASM module
 //	err := c.SetBinary("wasm/my-module", wasmBytes, "application/wasm")
+//	err = c.SetBinary("artifacts/logo", pngBytes, "image/png")
 func (c *Cache) SetBinary(key string, data []byte, contentType string) error {
 	if err := c.ensureReady("cache.SetBinary"); err != nil {
 		return err
@@ -284,10 +286,10 @@ func (c *Cache) SetBinary(key string, data []byte, contentType string) error {
 	return c.setBinary(key, data, contentType, c.defaultTTL(), true)
 }
 
-// SetBinaryWithTTL stores raw bytes with a key-specific TTL.
+// SetBinaryWithTTL stores raw bytes with an explicit TTL override.
 //
-//	// Short-lived opaque response body
 //	err := c.SetBinaryWithTTL("responses/temp", body, "text/html", 10*time.Minute)
+//	err = c.SetBinaryWithTTL("dns/example.com/AAAA", raw, "application/octet-stream", 15*time.Second)
 func (c *Cache) SetBinaryWithTTL(key string, data []byte, contentType string, ttl time.Duration) error {
 	if err := c.ensureReady("cache.SetBinaryWithTTL"); err != nil {
 		return err
@@ -344,7 +346,6 @@ func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.
 
 // GetBinary returns raw binary cache payload.
 //
-//	// data contains the raw bytes when found is true
 //	data, found, err := c.GetBinary("wasm/my-module")
 func (c *Cache) GetBinary(key string) ([]byte, bool, error) {
 	if err := c.ensureReady("cache.GetBinary"); err != nil {
@@ -388,6 +389,7 @@ func (c *Cache) GetBinary(key string) ([]byte, bool, error) {
 // DeleteMany removes several entries in one call. Missing keys are ignored.
 //
 //	err := c.DeleteMany("github/acme/repos", "github/acme/meta")
+//	err = c.DeleteMany("dns/example.com/A", "dns/example.com/AAAA")
 func (c *Cache) DeleteMany(keys ...string) error {
 	if err := c.ensureReady("cache.DeleteMany"); err != nil {
 		return err
@@ -566,7 +568,7 @@ func segmentMatch(pattern, name string) (bool, error) {
 	return p == len(pattern), nil
 }
 
-// OnInvalidate registers callback for cache invalidation triggers.
+// OnInvalidate registers a trigger callback that returns patterns to delete.
 //
 //	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
 //		return []string{"dns/*"}
@@ -615,6 +617,7 @@ func (c *Cache) Invalidate(trigger string) (int, error) {
 // Scoped returns a cache namespaced by origin hash.
 //
 //	scoped := c.Scoped("https://app.example.com")
+//	_ = scoped.Set("user/profile", profile)
 func (c *Cache) Scoped(origin string) *ScopedCache {
 	if c == nil {
 		return nil
@@ -626,6 +629,8 @@ func (c *Cache) Scoped(origin string) *ScopedCache {
 }
 
 // ClearScope removes cache entries for a scoped origin.
+//
+//	err := c.ClearScope("https://app.example.com")
 func (c *Cache) ClearScope(origin string) error {
 	if err := c.ensureReady("cache.ClearScope"); err != nil {
 		return err
@@ -839,14 +844,16 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 	}, nil
 }
 
-// Open retrieves a named HTTPCache.
+// Open retrieves a named HTTPCache, creating it on first use.
 //
 //	staticCache, err := storage.Open("static-assets-v2")
-//
 //	api, err := storage.Open("api-responses")
 func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
 	if cs == nil {
 		return nil, core.E("cache.CacheStorage.Open", "cache storage is nil", nil)
+	}
+	if cs.caches == nil {
+		cs.caches = make(map[string]*HTTPCache)
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Open", name); err != nil {
 		return nil, err
@@ -873,8 +880,7 @@ func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
 // Delete removes a named HTTP cache and all entries.
 //
 //	err := storage.Delete("static-assets-v1")
-//
-//	err := storage.Delete("old-cache")
+//	err = storage.Delete("old-cache")
 func (cs *CacheStorage) Delete(name string) error {
 	if cs == nil {
 		return core.E("cache.CacheStorage.Delete", "cache storage is nil", nil)
@@ -940,7 +946,13 @@ func (cs *CacheStorage) Keys() ([]string, error) {
 }
 
 // Close releases storage resources for compatibility with long-lived workflows.
-func (cs *CacheStorage) Close() error { return nil }
+func (cs *CacheStorage) Close() error {
+	if cs == nil {
+		return nil
+	}
+	cs.caches = make(map[string]*HTTPCache)
+	return nil
+}
 
 // HTTPCache stores request/response pairs.
 //
@@ -1034,7 +1046,7 @@ func (hc *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 	return hc.readResponse(key)
 }
 
-// Put stores request/response pair and response body.
+// Put stores a request/response pair and its body.
 //
 //	err := appCache.Put(
 //	    cache.CachedRequest{URL: "https://example.com/style.css", Method: "GET"},
