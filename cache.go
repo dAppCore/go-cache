@@ -774,6 +774,9 @@ func (c *ScopedCache) DeleteMany(keys ...string) error {
 	return c.parent.DeleteMany(full...)
 }
 
+// Clear removes all entries in the scope.
+//
+//	err := scoped.Clear()
 func (c *ScopedCache) Clear() error {
 	if c == nil || c.parent == nil {
 		return core.E("cache.Scoped.Clear", "scoped cache is nil", nil)
@@ -781,6 +784,9 @@ func (c *ScopedCache) Clear() error {
 	return c.parent.clearScope(c.prefix)
 }
 
+// ClearScope removes cache entries for a scoped origin.
+//
+//	err := scoped.ClearScope("https://app.example.com")
 func (c *ScopedCache) ClearScope(origin string) error {
 	if c == nil || c.parent == nil {
 		return core.E("cache.Scoped.ClearScope", "scoped cache is nil", nil)
@@ -951,6 +957,9 @@ func (cs *CacheStorage) Keys() ([]string, error) {
 }
 
 // Close releases storage resources for compatibility with long-lived workflows.
+//
+//	_ = storage.Close()
+//	appCache, err := storage.Open("reused-cache")
 func (cs *CacheStorage) Close() error {
 	if cs == nil {
 		return nil
