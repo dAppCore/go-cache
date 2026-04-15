@@ -621,6 +621,46 @@ func TestCache_Invalidate_Good(t *testing.T) {
 	}
 }
 
+func TestCache_Invalidate_PrefixWildcardDoesNotMatchBarePrefix(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-invalidate-prefix", time.Minute)
+
+	if err := c.Set("dns", "root"); err != nil {
+		t.Fatalf("Set bare prefix failed: %v", err)
+	}
+	if err := c.Set("dns/example.com/A", "record"); err != nil {
+		t.Fatalf("Set nested dns entry failed: %v", err)
+	}
+
+	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
+		return []string{"dns/*"}
+	})
+	deleted, err := c.Invalidate("dns.tree-root-changed")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected one descendant to be deleted, got %d", deleted)
+	}
+
+	var root string
+	found, err := c.Get("dns", &root)
+	if err != nil {
+		t.Fatalf("Get bare prefix failed: %v", err)
+	}
+	if !found || root != "root" {
+		t.Fatalf("expected bare prefix entry to remain, found=%v val=%q", found, root)
+	}
+
+	var record string
+	found, err = c.Get("dns/example.com/A", &record)
+	if err != nil {
+		t.Fatalf("Get nested entry failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected nested dns entry to be deleted")
+	}
+}
+
 func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-traversal")
 	if err != nil {

@@ -534,7 +534,7 @@ func matchKeyPattern(pattern, key string) (bool, error) {
 		if prefix == "" {
 			return true, nil
 		}
-		return key == prefix || core.HasPrefix(key, prefix+"/"), nil
+		return core.HasPrefix(key, prefix+"/"), nil
 	}
 
 	// Otherwise match a single path segment against the last pattern segment.
