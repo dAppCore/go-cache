@@ -26,6 +26,8 @@ import (
 const DefaultTTL = 1 * time.Hour
 
 // Cache stores JSON-encoded entries in a Medium-backed cache rooted at baseDir.
+//
+//	c, err := cache.New(coreio.Local, "/tmp/cache", 5*time.Minute)
 type Cache struct {
 	medium       coreio.Medium
 	baseDir      string
@@ -57,7 +59,9 @@ type BinaryMeta struct {
 
 // InvalidateFunc returns glob patterns to delete when a registered trigger fires.
 //
-//	fn := func(trigger string) []string { return []string{"dns/*"} }
+//	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
+//		return []string{"dns/*"}
+//	})
 type InvalidateFunc func(trigger string) []string
 
 // New creates a cache with explicit storage, root directory, and TTL.
@@ -809,6 +813,7 @@ func (c *ScopedCache) Age(key string) time.Duration {
 //
 //	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
 //	appCache, err := storage.Open("my-app-v1")
+//	defer storage.Close()
 type CacheStorage struct {
 	medium      coreio.Medium
 	baseDir     string
@@ -956,6 +961,7 @@ func (cs *CacheStorage) Close() error {
 
 // HTTPCache stores request/response pairs.
 //
+//	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
 //	appCache, _ := storage.Open("my-app-v1")
 //	err := appCache.Put(req, resp, body)
 type HTTPCache struct {
@@ -964,11 +970,25 @@ type HTTPCache struct {
 	baseDir string
 }
 
+// CachedRequest identifies a request by URL and method.
+//
+//	req := cache.CachedRequest{
+//		URL:    "https://api.example.com/users",
+//		Method: "GET",
+//	}
 type CachedRequest struct {
 	URL    string `json:"url"`
 	Method string `json:"method"`
 }
 
+// CachedResponse stores HTTP metadata for a cached response body.
+//
+//	resp := cache.CachedResponse{
+//		Status:     200,
+//		StatusText: "OK",
+//		Headers:    map[string]string{"Content-Type": "application/json"},
+//		BodyPath:   "responses/a1b2c3.bin",
+//	}
 type CachedResponse struct {
 	Status     int               `json:"status"`
 	StatusText string            `json:"status_text"`
