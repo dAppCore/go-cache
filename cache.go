@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
+	"os"
 	"slices"
 	"time"
 
@@ -1209,6 +1210,10 @@ func absolutePath(path string) string {
 }
 
 func currentDir() string {
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		return normalizePath(cwd)
+	}
+
 	cwd := normalizePath(core.Env("PWD"))
 	if cwd != "" && cwd != "." {
 		return cwd

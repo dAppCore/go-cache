@@ -3,6 +3,7 @@
 package cache_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,8 @@ func readEntry(t *testing.T, raw string) cache.Entry {
 func TestCache_New_Good(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
+	t.Setenv("PWD", "")
+	t.Setenv("DIR_CWD", "")
 
 	c, m := newTestCache(t, "", 0)
 
@@ -52,7 +55,11 @@ func TestCache_New_Good(t *testing.T) {
 		t.Fatalf("Path failed: %v", err)
 	}
 
-	wantPath := core.JoinPath(tmpDir, ".core", "cache", key+".json")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	wantPath := core.JoinPath(cwd, ".core", "cache", key+".json")
 	if path != wantPath {
 		t.Fatalf("expected default path %q, got %q", wantPath, path)
 	}
