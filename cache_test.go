@@ -336,6 +336,24 @@ func TestCache_SetWithTTL_Good(t *testing.T) {
 	}
 }
 
+func TestCache_SetWithTTL_ZeroExpiresImmediately(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-set-with-ttl-zero", 10*time.Minute)
+
+	key := "session/instant"
+	if err := c.SetWithTTL(key, map[string]string{"token": "abc"}, 0); err != nil {
+		t.Fatalf("SetWithTTL failed: %v", err)
+	}
+
+	var dest map[string]string
+	found, err := c.Get(key, &dest)
+	if err != nil {
+		t.Fatalf("Get after zero ttl failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected zero ttl entry to expire immediately")
+	}
+}
+
 func TestCache_Binary_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary", 10*time.Minute)
 
@@ -372,6 +390,23 @@ func TestCache_Binary_WithTTL_Expires(t *testing.T) {
 	}
 	if found {
 		t.Fatalf("expected binary item to expire")
+	}
+}
+
+func TestCache_Binary_WithTTL_ZeroExpiresImmediately(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary-zero-expiry", 10*time.Minute)
+
+	blob := []byte("instant")
+	if err := c.SetBinaryWithTTL("temp/instant", blob, "text/plain", 0); err != nil {
+		t.Fatalf("SetBinaryWithTTL failed: %v", err)
+	}
+
+	_, found, err := c.GetBinary("temp/instant")
+	if err != nil {
+		t.Fatalf("GetBinary after zero ttl failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected zero ttl binary entry to expire immediately")
 	}
 }
 

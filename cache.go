@@ -167,7 +167,7 @@ func (c *Cache) Set(key string, data any) error {
 	if err := c.ensureReady("cache.Set"); err != nil {
 		return err
 	}
-	return c.set(key, data, c.defaultTTL())
+	return c.set(key, data, c.defaultTTL(), true)
 }
 
 // SetWithTTL stores a value using a key-specific TTL.
@@ -177,10 +177,10 @@ func (c *Cache) SetWithTTL(key string, data any, ttl time.Duration) error {
 	if err := c.ensureReady("cache.SetWithTTL"); err != nil {
 		return err
 	}
-	return c.set(key, data, ttl)
+	return c.set(key, data, ttl, false)
 }
 
-func (c *Cache) set(key string, data any, ttl time.Duration) error {
+func (c *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL bool) error {
 	if err := c.ensureReady("cache.set"); err != nil {
 		return err
 	}
@@ -202,7 +202,7 @@ func (c *Cache) set(key string, data any, ttl time.Duration) error {
 	if ttl < 0 {
 		return core.E("cache.set", "cache ttl must be >= 0", nil)
 	}
-	if ttl == 0 {
+	if ttl == 0 && useDefaultTTL {
 		ttl = c.defaultTTL()
 	}
 
@@ -264,6 +264,8 @@ func (c *Cache) removeEntryFiles(key string) (bool, error) {
 		if !core.Is(err, fs.ErrNotExist) {
 			return removed, core.E("cache.removeEntryFiles", "failed to delete cache binary file", err)
 		}
+	} else {
+		removed = true
 	}
 
 	return removed, nil
@@ -276,7 +278,7 @@ func (c *Cache) SetBinary(key string, data []byte, contentType string) error {
 	if err := c.ensureReady("cache.SetBinary"); err != nil {
 		return err
 	}
-	return c.setBinary(key, data, contentType, c.defaultTTL())
+	return c.setBinary(key, data, contentType, c.defaultTTL(), true)
 }
 
 // SetBinaryWithTTL stores raw bytes with a key-specific TTL.
@@ -284,10 +286,10 @@ func (c *Cache) SetBinaryWithTTL(key string, data []byte, contentType string, tt
 	if err := c.ensureReady("cache.SetBinaryWithTTL"); err != nil {
 		return err
 	}
-	return c.setBinary(key, data, contentType, ttl)
+	return c.setBinary(key, data, contentType, ttl, false)
 }
 
-func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.Duration) error {
+func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.Duration, useDefaultTTL bool) error {
 	if err := c.ensureReady("cache.setBinary"); err != nil {
 		return err
 	}
@@ -298,7 +300,7 @@ func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.
 	if ttl < 0 {
 		return core.E("cache.setBinary", "cache ttl must be >= 0", nil)
 	}
-	if ttl == 0 {
+	if ttl == 0 && useDefaultTTL {
 		ttl = c.defaultTTL()
 	}
 
@@ -758,6 +760,20 @@ func (c *ScopedCache) Clear() error {
 		return core.E("cache.Scoped.Clear", "scoped cache is nil", nil)
 	}
 	return c.parent.clearScope(c.prefix)
+}
+
+func (c *ScopedCache) OnInvalidate(trigger string, fn InvalidateFunc) {
+	if c == nil || c.parent == nil {
+		return
+	}
+	c.parent.OnInvalidate(trigger, fn)
+}
+
+func (c *ScopedCache) Invalidate(trigger string) (int, error) {
+	if c == nil || c.parent == nil {
+		return 0, core.E("cache.Scoped.Invalidate", "scoped cache is nil", nil)
+	}
+	return c.parent.Invalidate(trigger)
 }
 
 func (c *ScopedCache) Age(key string) time.Duration {
