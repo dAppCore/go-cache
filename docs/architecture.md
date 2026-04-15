@@ -99,6 +99,10 @@ The resulting file on disc (or equivalent record in another medium) looks like:
 Parent directories for nested keys (e.g. `github/host-uk/repos`) are created
 automatically via `medium.EnsureDir()`.
 
+`SetWithTTL` uses the caller-supplied TTL for a single entry. `SetBinary` and
+`SetBinaryWithTTL` use the same envelope pattern, but split the payload into a
+binary sidecar (`.bin`) plus JSON metadata (`BinaryMeta`).
+
 
 ### Reading (`Get`)
 
@@ -140,6 +144,10 @@ Key behaviours:
   missing files, using the same per-key path validation as `Delete()`.
 - **`Clear()`** calls `medium.DeleteAll(baseDir)`, removing the entire cache
   directory and all its contents.
+- **`Scoped(origin)`** returns a `ScopedCache` that prepends a stable origin
+  hash to each key, so separate origins never collide.
+- **`Invalidate(trigger)`** executes registered callbacks and deletes any keys
+  matched by the returned glob patterns.
 
 
 ### Age Inspection
@@ -147,6 +155,35 @@ Key behaviours:
 `Age(key)` returns the `time.Duration` since the entry was written (`CachedAt`).
 If the entry does not exist or cannot be parsed, it returns `-1`. This is useful
 for diagnostics without triggering the expiry check that `Get` performs.
+
+
+## Scoped Caches
+
+`Scoped(origin)` creates a lightweight wrapper around the parent cache. The
+wrapper hashes the origin with SHA-1 and uses the result as a fixed namespace
+prefix:
+
+```go
+scoped := c.Scoped("https://app.example.com")
+_ = scoped.Set("user/profile", profile)
+```
+
+This gives each origin its own key space while keeping the same underlying
+storage medium and TTL behaviour.
+
+
+## HTTP Cache Storage
+
+`CacheStorage` manages named `HTTPCache` instances. Each named cache stores a
+request/response pair using:
+
+- `CachedRequest{URL, Method}` as the lookup key
+- `CachedResponse` JSON metadata for status, headers, and cached time
+- a binary body sidecar stored under `responses/<key>.bin`
+
+`Put` overwrites existing entries for the same request key, `Match` returns
+`nil` on a miss, `ReadBody` validates the body path before reading, and `Keys`
+returns the unique set of request URLs stored in a named cache.
 
 
 ## Key-to-Path Mapping
