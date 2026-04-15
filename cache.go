@@ -166,7 +166,7 @@ func (cache *Cache) Get(key string, dest any) (bool, error) {
 	var entry Entry
 	entryResult := core.JSONUnmarshalString(dataStr, &entry)
 	if !entryResult.OK {
-		return false, nil
+		return false, core.E("cache.Get", "failed to unmarshal cache entry", entryResult.Value.(error))
 	}
 
 	if time.Now().After(entry.ExpiresAt) {
@@ -381,7 +381,7 @@ func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
 	var meta BinaryMeta
 	metaResult := core.JSONUnmarshalString(rawMeta, &meta)
 	if !metaResult.OK {
-		return nil, false, nil
+		return nil, false, core.E("cache.GetBinary", "failed to unmarshal binary metadata", metaResult.Value.(error))
 	}
 
 	if time.Now().After(meta.ExpiresAt) {
@@ -881,11 +881,8 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 //	staticCache, err := storage.Open("static-assets-v2")
 //	api, err := storage.Open("api-responses")
 func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
-	if storage == nil {
-		return nil, core.E("cache.CacheStorage.Open", "cache storage is nil", nil)
-	}
-	if storage.caches == nil {
-		storage.caches = make(map[string]*HTTPCache)
+	if err := storage.ensureReady("cache.CacheStorage.Open"); err != nil {
+		return nil, err
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Open", name); err != nil {
 		return nil, err
@@ -914,8 +911,8 @@ func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
 //	err := storage.Delete("static-assets-v1")
 //	err = storage.Delete("old-cache")
 func (storage *CacheStorage) Delete(name string) error {
-	if storage == nil {
-		return core.E("cache.CacheStorage.Delete", "cache storage is nil", nil)
+	if err := storage.ensureReady("cache.CacheStorage.Delete"); err != nil {
+		return err
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Delete", name); err != nil {
 		return err
@@ -948,8 +945,8 @@ func ensureSafeCacheName(op, name string) error {
 //	names, err := storage.Keys()
 //	// ["static-assets-v2", "api-responses"]
 func (storage *CacheStorage) Keys() ([]string, error) {
-	if storage == nil {
-		return nil, core.E("cache.CacheStorage.Keys", "cache storage is nil", nil)
+	if err := storage.ensureReady("cache.CacheStorage.Keys"); err != nil {
+		return nil, err
 	}
 
 	entries, err := storage.medium.List(storage.baseDir)
@@ -998,6 +995,35 @@ type HTTPCache struct {
 	name    string
 	medium  coreio.Medium
 	baseDir string
+}
+
+func (storage *CacheStorage) ensureReady(op string) error {
+	if storage == nil {
+		return core.E(op, "cache storage is nil", nil)
+	}
+	if storage.medium == nil {
+		return core.E(op, "cache storage medium is nil; construct via cache.NewCacheStorage", nil)
+	}
+	if storage.baseDir == "" {
+		return core.E(op, "cache storage base directory is empty; construct via cache.NewCacheStorage", nil)
+	}
+	if storage.caches == nil {
+		storage.caches = make(map[string]*HTTPCache)
+	}
+	return nil
+}
+
+func (httpCache *HTTPCache) ensureReady(op string) error {
+	if httpCache == nil {
+		return core.E(op, "http cache is nil", nil)
+	}
+	if httpCache.medium == nil {
+		return core.E(op, "http cache medium is nil; construct via cache.CacheStorage.Open", nil)
+	}
+	if httpCache.baseDir == "" {
+		return core.E(op, "http cache base directory is empty; construct via cache.CacheStorage.Open", nil)
+	}
+	return nil
 }
 
 // CachedRequest identifies a request by URL and method.
@@ -1075,7 +1101,7 @@ func (httpCache *HTTPCache) readResponse(key string) (*CachedResponse, error) {
 	var response CachedResponse
 	responseResult := core.JSONUnmarshalString(raw, &response)
 	if !responseResult.OK {
-		return nil, nil
+		return nil, core.E("cache.HTTPCache.readResponse", "failed to unmarshal cached response", responseResult.Value.(error))
 	}
 
 	return &response, nil
@@ -1085,8 +1111,8 @@ func (httpCache *HTTPCache) readResponse(key string) (*CachedResponse, error) {
 //
 //	resp, err := cache.Match(cache.CachedRequest{URL: "https://x", Method: "GET"})
 func (httpCache *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
-	if httpCache == nil {
-		return nil, core.E("cache.HTTPCache.Match", "http cache is nil", nil)
+	if err := httpCache.ensureReady("cache.HTTPCache.Match"); err != nil {
+		return nil, err
 	}
 	key, err := httpCache.requestKey(req)
 	if err != nil {
@@ -1104,8 +1130,8 @@ func (httpCache *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 //	    bodyBytes,
 //	)
 func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []byte) error {
-	if httpCache == nil {
-		return core.E("cache.HTTPCache.Put", "http cache is nil", nil)
+	if err := httpCache.ensureReady("cache.HTTPCache.Put"); err != nil {
+		return err
 	}
 	key, err := httpCache.requestKey(req)
 	if err != nil {
@@ -1141,8 +1167,8 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 //
 //	body, err := appCache.ReadBody(resp)
 func (httpCache *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
-	if httpCache == nil {
-		return nil, core.E("cache.HTTPCache.ReadBody", "http cache is nil", nil)
+	if err := httpCache.ensureReady("cache.HTTPCache.ReadBody"); err != nil {
+		return nil, err
 	}
 	if resp == nil {
 		return nil, core.E("cache.HTTPCache.ReadBody", "response is nil", nil)
@@ -1164,8 +1190,8 @@ func (httpCache *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 //
 //	err := appCache.Delete(cache.CachedRequest{URL: "https://example.com/old.js", Method: "GET"})
 func (httpCache *HTTPCache) Delete(req CachedRequest) error {
-	if httpCache == nil {
-		return core.E("cache.HTTPCache.Delete", "http cache is nil", nil)
+	if err := httpCache.ensureReady("cache.HTTPCache.Delete"); err != nil {
+		return err
 	}
 
 	key, err := httpCache.requestKey(req)
@@ -1188,8 +1214,8 @@ func (httpCache *HTTPCache) Delete(req CachedRequest) error {
 //	urls, err := appCache.Keys()
 //	// ["https://example.com/style.css", "https://example.com/app.js"]
 func (httpCache *HTTPCache) Keys() ([]string, error) {
-	if httpCache == nil {
-		return nil, core.E("cache.HTTPCache.Keys", "http cache is nil", nil)
+	if err := httpCache.ensureReady("cache.HTTPCache.Keys"); err != nil {
+		return nil, err
 	}
 
 	entries, err := httpCache.medium.List(httpCache.storagePath("responses"))
