@@ -618,6 +618,9 @@ func (cache *Cache) OnInvalidate(trigger string, fn InvalidateFunc) {
 	if err := cache.ensureReady("cache.OnInvalidate"); err != nil {
 		return
 	}
+	if fn == nil {
+		return
+	}
 	cache.invalidation[trigger] = append(cache.invalidation[trigger], fn)
 }
 
@@ -821,7 +824,6 @@ func (scopedCache *ScopedCache) OnInvalidate(trigger string, fn InvalidateFunc) 
 		return
 	}
 	if fn == nil {
-		scopedCache.parent.OnInvalidate(trigger, nil)
 		return
 	}
 

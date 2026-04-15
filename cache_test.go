@@ -706,6 +706,60 @@ func TestCache_Invalidate_PrefixWildcardDoesNotMatchBarePrefix(t *testing.T) {
 	}
 }
 
+func TestCache_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-invalidate-nil", time.Minute)
+
+	if err := c.Set("dns/example.com/A", "record"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	c.OnInvalidate("dns.tree-root-changed", nil)
+	deleted, err := c.Invalidate("dns.tree-root-changed")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected nil callback to be ignored, got %d deletions", deleted)
+	}
+
+	var record string
+	found, err := c.Get("dns/example.com/A", &record)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found || record != "record" {
+		t.Fatalf("expected entry to remain, found=%v val=%q", found, record)
+	}
+}
+
+func TestCache_Scoped_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-scoped-invalidate-nil", time.Minute)
+
+	scoped := c.Scoped("https://app.example.com")
+
+	if err := scoped.Set("dns/example.com/A", "record"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	scoped.OnInvalidate("dns.tree-root-changed", nil)
+	deleted, err := scoped.Invalidate("dns.tree-root-changed")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected nil scoped callback to be ignored, got %d deletions", deleted)
+	}
+
+	var record string
+	found, err := scoped.Get("dns/example.com/A", &record)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found || record != "record" {
+		t.Fatalf("expected scoped entry to remain, found=%v val=%q", found, record)
+	}
+}
+
 func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-traversal")
 	if err != nil {
