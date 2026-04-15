@@ -570,6 +570,20 @@ func TestCache_Clear_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_ClearScope_Bad_ListFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	c, err := cache.New(medium, "/tmp/cache-clear-scope-bad", time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	medium.listErr["/tmp/cache-clear-scope-bad"] = errors.New("boom")
+
+	if err := c.ClearScope("https://app.example.com"); err == nil {
+		t.Fatal("expected ClearScope to surface backend list failure")
+	}
+}
+
 func TestCache_GitHubReposKey_Good(t *testing.T) {
 	key := cache.GitHubReposKey("myorg")
 	if key != "github/myorg/repos" {
@@ -791,6 +805,26 @@ func TestCache_GetBinary_Bad(t *testing.T) {
 
 	if _, found, err := c.GetBinary(key); err == nil || found {
 		t.Fatalf("expected malformed binary metadata to fail, found=%v err=%v", found, err)
+	}
+}
+
+func TestCache_GetBinary_Bad_MissingPayload(t *testing.T) {
+	c, m := newTestCache(t, "/tmp/cache-get-binary-missing-payload", time.Minute)
+
+	key := "blob/missing"
+	if err := c.SetBinary(key, []byte("payload"), "application/octet-stream"); err != nil {
+		t.Fatalf("SetBinary failed: %v", err)
+	}
+
+	jsonPath, err := c.Path(key)
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	binPath := strings.TrimSuffix(jsonPath, ".json") + ".bin"
+	delete(m.Files, binPath)
+
+	if data, found, err := c.GetBinary(key); err != nil || found || data != nil {
+		t.Fatalf("expected missing payload to be a clean miss, data=%v found=%v err=%v", data, found, err)
 	}
 }
 
@@ -1482,6 +1516,34 @@ func TestCache_HTTPCacheStorage_Keys_Good_EmptyDir(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCacheStorage_Keys_Bad_ListFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-keys-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	medium.listErr["/tmp/cache-http-keys-bad"] = errors.New("boom")
+
+	if _, err := storage.Keys(); err == nil {
+		t.Fatal("expected Keys to surface backend list failure")
+	}
+}
+
+func TestCache_HTTPCacheStorage_Delete_Bad_BackendFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-delete-storage-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	medium.deleteAllErr["/tmp/cache-http-delete-storage-bad/blocked"] = errors.New("boom")
+
+	if err := storage.Delete("blocked"); err == nil {
+		t.Fatal("expected Delete to surface backend failure")
+	}
+}
+
 func TestCache_HTTPCacheStorage_Close_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-close")
 	if err != nil {
@@ -1593,6 +1655,25 @@ func TestCache_HTTPCache_Keys_Good_EmptyResponseDir(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCache_Keys_Bad_ListFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-keys-list-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("keys-list-bad")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	medium.listErr["/tmp/cache-http-keys-list-bad/keys-list-bad/responses"] = errors.New("boom")
+
+	if _, err := httpCache.Keys(); err == nil {
+		t.Fatal("expected Keys to surface backend list failure")
+	}
+}
+
 func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-body-safety")
 	if err != nil {
@@ -1627,6 +1708,44 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCacheReadBody_Bad_MissingPayload(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-body-missing")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("body-missing")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/missing",
+		Method: "GET",
+	}
+	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
+	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	bodyPath := "/tmp/cache-http-body-missing/body-missing/responses/" + key + ".bin"
+	delete(medium.Files, bodyPath)
+
+	matched, err := httpCache.Match(req)
+	if err != nil {
+		t.Fatalf("Match failed: %v", err)
+	}
+	if matched == nil {
+		t.Fatal("expected response metadata to remain")
+	}
+
+	if _, err := httpCache.ReadBody(matched); err == nil {
+		t.Fatal("expected ReadBody to fail when the body payload is missing")
+	}
+}
+
 func TestCache_HTTPCache_NilReceiver_Bad(t *testing.T) {
 	var httpCache *cache.HTTPCache
 	req := cache.CachedRequest{URL: "https://example.com", Method: "GET"}
@@ -1646,6 +1765,72 @@ func TestCache_HTTPCache_NilReceiver_Bad(t *testing.T) {
 	}
 	if _, err := httpCache.Keys(); err == nil {
 		t.Fatal("expected Keys to fail on nil http cache")
+	}
+}
+
+func TestCache_HTTPCache_Delete_Bad_BackendFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-delete-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("delete-bad")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-delete-bad/delete-bad/responses/" + key + ".json"
+	medium.deleteErr[metaPath] = errors.New("boom")
+
+	if err := httpCache.Delete(req); err == nil {
+		t.Fatal("expected Delete to surface backend failure")
+	}
+}
+
+func TestCache_HTTPCache_Match_Bad_IncompleteEnvelope(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-incomplete")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-incomplete")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-match-incomplete/match-incomplete/responses/" + key + ".json"
+	medium.Files[metaPath] = `{"request":{"url":"https://example.com/style.css","method":"GET"}}`
+
+	if matched, err := httpCache.Match(req); err == nil || matched != nil {
+		t.Fatalf("expected Match to reject incomplete cached response envelope, matched=%v err=%v", matched, err)
+	}
+}
+
+func TestCache_HTTPCache_Match_Bad_EmptyRequest(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-match-empty")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-empty")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	if matched, err := httpCache.Match(cache.CachedRequest{}); err == nil || matched != nil {
+		t.Fatalf("expected Match to reject empty request metadata, matched=%v err=%v", matched, err)
 	}
 }
 
@@ -1811,6 +1996,14 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 				Status:     200,
 				StatusText: "OK",
 				Headers:    map[string]string{"X-Inject\r\ned": "value"},
+			},
+		},
+		{
+			name: "empty-header-name",
+			resp: cache.CachedResponse{
+				Status:     200,
+				StatusText: "OK",
+				Headers:    map[string]string{"": "value"},
 			},
 		},
 		{
