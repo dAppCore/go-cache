@@ -1003,4 +1003,8 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "../../etc/passwd"}); err == nil {
 		t.Fatal("expected ReadBody to reject traversal body paths")
 	}
+
+	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "config/secret.bin"}); err == nil {
+		t.Fatal("expected ReadBody to reject body paths outside responses/")
+	}
 }

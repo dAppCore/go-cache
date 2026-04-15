@@ -13,6 +13,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"dappco.re/go/core"
@@ -34,6 +35,7 @@ type Cache struct {
 	baseDir      string
 	cacheTTL     time.Duration
 	invalidation map[string][]InvalidateFunc
+	mu           sync.RWMutex
 }
 
 // Entry is the serialized cache record written to the backing Medium.
@@ -621,6 +623,8 @@ func (cache *Cache) OnInvalidate(trigger string, fn InvalidateFunc) {
 	if fn == nil {
 		return
 	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	cache.invalidation[trigger] = append(cache.invalidation[trigger], fn)
 }
 
@@ -632,7 +636,9 @@ func (cache *Cache) Invalidate(trigger string) (int, error) {
 		return 0, err
 	}
 
-	callbacks := cache.invalidation[trigger]
+	cache.mu.RLock()
+	callbacks := append([]InvalidateFunc(nil), cache.invalidation[trigger]...)
+	cache.mu.RUnlock()
 	total := 0
 	for _, callback := range callbacks {
 		for _, pattern := range callback(trigger) {
@@ -709,6 +715,28 @@ func ensureSafeKey(key string) error {
 		if part == "" || part == "." || part == ".." {
 			return core.E("cache.validateKey", "invalid key: path traversal attempt", nil)
 		}
+	}
+
+	return nil
+}
+
+func ensureSafeResponseBodyPath(path string) error {
+	if path == "" {
+		return core.E("cache.validateResponseBodyPath", "invalid empty body path", nil)
+	}
+	if core.PathIsAbs(path) {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: absolute paths are not allowed", nil)
+	}
+	if core.Contains(path, "\\") || core.Contains(path, "\x00") {
+		return core.E("cache.validateResponseBodyPath", "invalid body path", nil)
+	}
+
+	parts := core.Split(path, "/")
+	if len(parts) != 2 || parts[0] != "responses" || parts[1] == "" || !core.HasSuffix(parts[1], ".bin") {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: expected responses/<key>.bin", nil)
+	}
+	if err := ensureSafeKey(core.TrimSuffix(parts[1], ".bin")); err != nil {
+		return core.E("cache.validateResponseBodyPath", "invalid body path", err)
 	}
 
 	return nil
@@ -876,6 +904,7 @@ type CacheStorage struct {
 	medium  coreio.Medium
 	baseDir string
 	caches  map[string]*HTTPCache
+	mu      sync.RWMutex
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
@@ -919,6 +948,8 @@ func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
 		return nil, err
 	}
 
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
 	if httpCache, ok := storage.caches[name]; ok {
 		return httpCache, nil
 	}
@@ -949,6 +980,8 @@ func (storage *CacheStorage) Delete(name string) error {
 		return err
 	}
 
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
 	if err := storage.medium.DeleteAll(core.JoinPath(storage.baseDir, name)); err != nil && !core.Is(err, fs.ErrNotExist) {
 		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
 	}
@@ -980,6 +1013,13 @@ func (storage *CacheStorage) Keys() ([]string, error) {
 		return nil, err
 	}
 
+	storage.mu.RLock()
+	names := make(map[string]struct{}, len(storage.caches))
+	for name := range storage.caches {
+		names[name] = struct{}{}
+	}
+	storage.mu.RUnlock()
+
 	entries, err := storage.medium.List(storage.baseDir)
 	if err != nil {
 		if !core.Is(err, fs.ErrNotExist) {
@@ -987,10 +1027,6 @@ func (storage *CacheStorage) Keys() ([]string, error) {
 		}
 	}
 
-	names := make(map[string]struct{}, len(storage.caches)+len(entries))
-	for name := range storage.caches {
-		names[name] = struct{}{}
-	}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			names[entry.Name()] = struct{}{}
@@ -1013,7 +1049,9 @@ func (storage *CacheStorage) Close() error {
 	if storage == nil {
 		return nil
 	}
+	storage.mu.Lock()
 	storage.caches = make(map[string]*HTTPCache)
+	storage.mu.Unlock()
 	return nil
 }
 
@@ -1038,9 +1076,11 @@ func (storage *CacheStorage) ensureReady(op string) error {
 	if storage.baseDir == "" {
 		return core.E(op, "cache storage base directory is empty; construct via cache.NewCacheStorage", nil)
 	}
+	storage.mu.Lock()
 	if storage.caches == nil {
 		storage.caches = make(map[string]*HTTPCache)
 	}
+	storage.mu.Unlock()
 	return nil
 }
 
@@ -1234,7 +1274,7 @@ func (httpCache *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 	if resp.BodyPath == "" {
 		return nil, core.E("cache.HTTPCache.ReadBody", "response has empty body path", nil)
 	}
-	if err := ensureSafeKey(resp.BodyPath); err != nil {
+	if err := ensureSafeResponseBodyPath(resp.BodyPath); err != nil {
 		return nil, core.E("cache.HTTPCache.ReadBody", "invalid response body path", err)
 	}
 	body, err := httpCache.medium.Read(httpCache.storagePath(resp.BodyPath))
