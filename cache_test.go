@@ -3,6 +3,10 @@
 package cache_test
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +16,77 @@ import (
 	"dappco.re/go/core"
 	coreio "dappco.re/go/core/io"
 )
+
+type scriptedMedium struct {
+	*coreio.MockMedium
+	readErr      map[string]error
+	writeErr     map[string]error
+	ensureDirErr map[string]error
+	deleteErr    map[string]error
+	deleteAllErr map[string]error
+	listErr      map[string]error
+}
+
+func newScriptedMedium() *scriptedMedium {
+	return &scriptedMedium{
+		MockMedium:   coreio.NewMockMedium(),
+		readErr:      make(map[string]error),
+		writeErr:     make(map[string]error),
+		ensureDirErr: make(map[string]error),
+		deleteErr:    make(map[string]error),
+		deleteAllErr: make(map[string]error),
+		listErr:      make(map[string]error),
+	}
+}
+
+func (m *scriptedMedium) Read(path string) (string, error) {
+	if err, ok := m.readErr[path]; ok {
+		return "", err
+	}
+	return m.MockMedium.Read(path)
+}
+
+func (m *scriptedMedium) Write(path, content string) error {
+	if err, ok := m.writeErr[path]; ok {
+		return err
+	}
+	return m.MockMedium.Write(path, content)
+}
+
+func (m *scriptedMedium) WriteMode(path, content string, mode fs.FileMode) error {
+	if err, ok := m.writeErr[path]; ok {
+		return err
+	}
+	return m.MockMedium.WriteMode(path, content, mode)
+}
+
+func (m *scriptedMedium) EnsureDir(path string) error {
+	if err, ok := m.ensureDirErr[path]; ok {
+		return err
+	}
+	return m.MockMedium.EnsureDir(path)
+}
+
+func (m *scriptedMedium) Delete(path string) error {
+	if err, ok := m.deleteErr[path]; ok {
+		return err
+	}
+	return m.MockMedium.Delete(path)
+}
+
+func (m *scriptedMedium) DeleteAll(path string) error {
+	if err, ok := m.deleteAllErr[path]; ok {
+		return err
+	}
+	return m.MockMedium.DeleteAll(path)
+}
+
+func (m *scriptedMedium) List(path string) ([]fs.DirEntry, error) {
+	if err, ok := m.listErr[path]; ok {
+		return nil, err
+	}
+	return m.MockMedium.List(path)
+}
 
 func newTestCache(t *testing.T, baseDir string, ttl time.Duration) (*cache.Cache, *coreio.MockMedium) {
 	t.Helper()
@@ -86,6 +161,22 @@ func TestCache_New_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_SetWithTTL_Bad(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-setwithttl-bad", time.Minute)
+
+	if err := c.SetWithTTL("session/bad", map[string]any{"handler": func() {}}, -time.Second); err == nil {
+		t.Fatal("expected SetWithTTL to reject negative ttl")
+	}
+}
+
+func TestCache_SetWithTTL_Ugly(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-setwithttl-ugly", time.Minute)
+
+	if err := c.SetWithTTL("session/ugly", map[string]any{"handler": func() {}}, time.Second); err == nil {
+		t.Fatal("expected SetWithTTL to reject unsupported JSON payload")
+	}
+}
+
 func TestCache_Path_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-path", time.Minute)
 
@@ -151,6 +242,54 @@ func TestCache_Get_Ugly(t *testing.T) {
 	}
 }
 
+func TestCache_Get_Bad(t *testing.T) {
+	c, m := newTestCache(t, "/tmp/cache-get-bad", time.Minute)
+
+	path, err := c.Path("corrupt")
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	m.Files[path] = "{not-json"
+
+	var dest map[string]string
+	found, err := c.Get("corrupt", &dest)
+	if err == nil {
+		t.Fatal("expected Get to reject malformed entry JSON")
+	}
+	if found {
+		t.Fatal("expected malformed entry to be reported as missing")
+	}
+}
+
+func TestCache_Get_Ugly_MalformedCachedPayload(t *testing.T) {
+	c, m := newTestCache(t, "/tmp/cache-get-ugly", time.Minute)
+
+	path, err := c.Path("bad-data")
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+
+	entry := cache.Entry{
+		Data:      []byte("123"),
+		CachedAt:  time.Now(),
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	m.Files[path] = string(raw)
+
+	var dest map[string]string
+	found, err := c.Get("bad-data", &dest)
+	if err == nil {
+		t.Fatal("expected Get to reject malformed cached payload")
+	}
+	if found {
+		t.Fatal("expected malformed payload to be reported as missing")
+	}
+}
+
 func TestCache_Age_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-age", time.Minute)
 
@@ -160,6 +299,24 @@ func TestCache_Age_Good(t *testing.T) {
 
 	if age := c.Age("test-key"); age < 0 {
 		t.Errorf("expected age >= 0, got %v", age)
+	}
+}
+
+func TestCache_Age_Bad(t *testing.T) {
+	c, m := newTestCache(t, "/tmp/cache-age-bad", time.Minute)
+
+	if age := c.Age("missing"); age != -1 {
+		t.Fatalf("expected Age to return -1 for missing entry, got %v", age)
+	}
+
+	path, err := c.Path("invalid")
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	m.Files[path] = "{not-json"
+
+	if age := c.Age("invalid"); age != -1 {
+		t.Fatalf("expected Age to return -1 for malformed entry, got %v", age)
 	}
 }
 
@@ -239,6 +396,22 @@ func TestCache_Delete_Good(t *testing.T) {
 	}
 	if found {
 		t.Error("expected item to be deleted")
+	}
+}
+
+func TestCache_Delete_Bad(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-delete-bad", time.Minute)
+
+	if err := c.Delete("../../etc/passwd"); err == nil {
+		t.Fatal("expected Delete to reject traversal key")
+	}
+}
+
+func TestCache_Delete_Ugly(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-delete-ugly", time.Minute)
+
+	if err := c.Delete("missing"); err != nil {
+		t.Fatalf("Delete on missing key should be a no-op: %v", err)
 	}
 }
 
@@ -330,6 +503,20 @@ func TestCache_Clear_Good(t *testing.T) {
 	}
 }
 
+func TestCache_Clear_Bad(t *testing.T) {
+	medium := newScriptedMedium()
+	c, err := cache.New(medium, "/tmp/cache-clear-bad", time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	medium.deleteAllErr["/tmp/cache-clear-bad"] = errors.New("boom")
+
+	if err := c.Clear(); err == nil {
+		t.Fatal("expected Clear to surface backend failure")
+	}
+}
+
 func TestCache_GitHubReposKey_Good(t *testing.T) {
 	key := cache.GitHubReposKey("myorg")
 	if key != "github/myorg/repos" {
@@ -407,6 +594,14 @@ func TestCache_SetWithTTL_ZeroExpiresImmediately(t *testing.T) {
 	}
 }
 
+func TestCache_Set_Ugly(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-set-ugly", time.Minute)
+
+	if err := c.Set("bad", func() {}); err == nil {
+		t.Fatal("expected Set to reject unsupported JSON payload")
+	}
+}
+
 func TestCache_Binary_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary", 10*time.Minute)
 
@@ -425,6 +620,37 @@ func TestCache_Binary_Good(t *testing.T) {
 	}
 	if string(data) != string(blob) {
 		t.Fatalf("unexpected binary payload: %q", data)
+	}
+}
+
+func TestCache_SetBinary_Bad(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary-bad", 10*time.Minute)
+
+	if err := c.SetBinaryWithTTL("../../etc/passwd", []byte("blob"), "text/plain", time.Second); err == nil {
+		t.Fatal("expected SetBinaryWithTTL to reject traversal key")
+	}
+}
+
+func TestCache_SetBinary_Ugly(t *testing.T) {
+	medium := newScriptedMedium()
+	c, err := cache.New(medium, "/tmp/cache-binary-ugly", time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	key := "wasm/ugly"
+	jsonPath, err := c.Path(key)
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	binPath := strings.TrimSuffix(jsonPath, ".json") + ".bin"
+	medium.writeErr[jsonPath] = errors.New("metadata boom")
+
+	if err := c.SetBinary(key, []byte("body"), "application/wasm"); err == nil {
+		t.Fatal("expected SetBinary to surface metadata write failure")
+	}
+	if _, ok := medium.Files[binPath]; ok {
+		t.Fatal("expected binary payload to be cleaned up after metadata write failure")
 	}
 }
 
@@ -485,6 +711,25 @@ func TestCache_Binary_WithTTL_ZeroExpiresImmediately(t *testing.T) {
 	}
 	if found {
 		t.Fatalf("expected zero ttl binary entry to expire immediately")
+	}
+}
+
+func TestCache_GetBinary_Bad(t *testing.T) {
+	c, m := newTestCache(t, "/tmp/cache-get-binary-bad", time.Minute)
+
+	if _, found, err := c.GetBinary("missing"); err != nil || found {
+		t.Fatalf("expected missing binary entry to be a clean miss, found=%v err=%v", found, err)
+	}
+
+	key := "bad/meta"
+	metaPath, err := c.Path(key)
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	m.Files[metaPath] = "{not-json"
+
+	if _, found, err := c.GetBinary(key); err == nil || found {
+		t.Fatalf("expected malformed binary metadata to fail, found=%v err=%v", found, err)
 	}
 }
 
@@ -706,6 +951,55 @@ func TestCache_Invalidate_PrefixWildcardDoesNotMatchBarePrefix(t *testing.T) {
 	}
 }
 
+func TestCache_Invalidate_SingleSegmentWildcard_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-invalidate-segment", time.Minute)
+
+	if err := c.Set("dns/charon.lthn", "one"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	if err := c.Set("dns/charon.local", "two"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	if err := c.Set("dns/other.local", "three"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	c.OnInvalidate("dns.changed", func(trigger string) []string {
+		return []string{"dns/charon.*"}
+	})
+
+	deleted, err := c.Invalidate("dns.changed")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("expected two wildcard matches to be deleted, got %d", deleted)
+	}
+
+	var value string
+	found, err := c.Get("dns/charon.lthn", &value)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected charon.lthn to be deleted")
+	}
+	found, err = c.Get("dns/charon.local", &value)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected charon.local to be deleted")
+	}
+	found, err = c.Get("dns/other.local", &value)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected unrelated entry to remain")
+	}
+}
+
 func TestCache_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate-nil", time.Minute)
 
@@ -760,6 +1054,102 @@ func TestCache_Scoped_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
 	}
 }
 
+func TestCache_Scoped_Wrappers_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-scoped-wrappers", time.Minute)
+	scoped := c.Scoped("https://app.example.com")
+
+	if err := scoped.Set("value", "alpha"); err != nil {
+		t.Fatalf("Scoped Set failed: %v", err)
+	}
+	if err := scoped.SetWithTTL("ttl", "beta", 5*time.Millisecond); err != nil {
+		t.Fatalf("Scoped SetWithTTL failed: %v", err)
+	}
+	if err := scoped.SetBinary("blob", []byte("bin"), "application/octet-stream"); err != nil {
+		t.Fatalf("Scoped SetBinary failed: %v", err)
+	}
+	if err := scoped.SetBinaryWithTTL("blob-ttl", []byte("bin2"), "application/octet-stream", 5*time.Millisecond); err != nil {
+		t.Fatalf("Scoped SetBinaryWithTTL failed: %v", err)
+	}
+
+	path, err := scoped.Path("value")
+	if err != nil {
+		t.Fatalf("Scoped Path failed: %v", err)
+	}
+	if !strings.Contains(path, "scope_") {
+		t.Fatalf("expected scoped path, got %q", path)
+	}
+
+	var value string
+	found, err := scoped.Get("value", &value)
+	if err != nil || !found || value != "alpha" {
+		t.Fatalf("unexpected scoped Get result: found=%v value=%q err=%v", found, value, err)
+	}
+
+	data, found, err := scoped.GetBinary("blob")
+	if err != nil || !found || string(data) != "bin" {
+		t.Fatalf("unexpected scoped GetBinary result: found=%v data=%q err=%v", found, data, err)
+	}
+
+	if age := scoped.Age("value"); age < 0 {
+		t.Fatalf("expected scoped Age >= 0, got %v", age)
+	}
+
+	if err := scoped.Delete("value"); err != nil {
+		t.Fatalf("Scoped Delete failed: %v", err)
+	}
+	if err := scoped.DeleteMany("ttl", "blob-ttl"); err != nil {
+		t.Fatalf("Scoped DeleteMany failed: %v", err)
+	}
+	if err := scoped.Clear(); err != nil {
+		t.Fatalf("Scoped Clear failed: %v", err)
+	}
+}
+
+func TestCache_Scoped_NilReceiver_Bad(t *testing.T) {
+	var scoped *cache.ScopedCache
+	var dest string
+
+	if _, err := scoped.Path("x"); err == nil {
+		t.Fatal("expected scoped Path to fail on nil receiver")
+	}
+	if _, err := scoped.Get("x", &dest); err == nil {
+		t.Fatal("expected scoped Get to fail on nil receiver")
+	}
+	if err := scoped.Set("x", "v"); err == nil {
+		t.Fatal("expected scoped Set to fail on nil receiver")
+	}
+	if err := scoped.SetWithTTL("x", "v", time.Second); err == nil {
+		t.Fatal("expected scoped SetWithTTL to fail on nil receiver")
+	}
+	if err := scoped.SetBinary("x", []byte("v"), "text/plain"); err == nil {
+		t.Fatal("expected scoped SetBinary to fail on nil receiver")
+	}
+	if err := scoped.SetBinaryWithTTL("x", []byte("v"), "text/plain", time.Second); err == nil {
+		t.Fatal("expected scoped SetBinaryWithTTL to fail on nil receiver")
+	}
+	if _, _, err := scoped.GetBinary("x"); err == nil {
+		t.Fatal("expected scoped GetBinary to fail on nil receiver")
+	}
+	if err := scoped.Delete("x"); err == nil {
+		t.Fatal("expected scoped Delete to fail on nil receiver")
+	}
+	if err := scoped.DeleteMany("x"); err == nil {
+		t.Fatal("expected scoped DeleteMany to fail on nil receiver")
+	}
+	if err := scoped.Clear(); err == nil {
+		t.Fatal("expected scoped Clear to fail on nil receiver")
+	}
+	if err := scoped.ClearScope("https://app.example.com"); err == nil {
+		t.Fatal("expected scoped ClearScope to fail on nil receiver")
+	}
+	if _, err := scoped.Invalidate("trigger"); err == nil {
+		t.Fatal("expected scoped Invalidate to fail on nil receiver")
+	}
+	if age := scoped.Age("x"); age != -1 {
+		t.Fatalf("expected scoped Age to return -1 on nil receiver, got %v", age)
+	}
+}
+
 func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-traversal")
 	if err != nil {
@@ -772,6 +1162,23 @@ func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 
 	if err := storage.Delete("../evil"); err == nil {
 		t.Fatal("expected Delete to reject traversal cache name")
+	}
+}
+
+func TestCache_HTTPCacheStorage_NilReceiver_Bad(t *testing.T) {
+	var storage *cache.CacheStorage
+
+	if _, err := storage.Open("x"); err == nil {
+		t.Fatal("expected Open to fail on nil storage")
+	}
+	if err := storage.Delete("x"); err == nil {
+		t.Fatal("expected Delete to fail on nil storage")
+	}
+	if _, err := storage.Keys(); err == nil {
+		t.Fatal("expected Keys to fail on nil storage")
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close on nil storage should be a no-op: %v", err)
 	}
 }
 
@@ -1000,11 +1407,146 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 		t.Fatalf("storage.Open failed: %v", err)
 	}
 
-	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "../../etc/passwd"}); err == nil {
-		t.Fatal("expected ReadBody to reject traversal body paths")
+	tests := []struct {
+		name string
+		resp *cache.CachedResponse
+	}{
+		{name: "nil", resp: nil},
+		{name: "empty", resp: &cache.CachedResponse{}},
+		{name: "traversal", resp: &cache.CachedResponse{BodyPath: "../../etc/passwd"}},
+		{name: "wrong-root", resp: &cache.CachedResponse{BodyPath: "config/secret.bin"}},
 	}
 
-	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "config/secret.bin"}); err == nil {
-		t.Fatal("expected ReadBody to reject body paths outside responses/")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := httpCache.ReadBody(tt.resp); err == nil {
+				t.Fatalf("expected ReadBody to reject %s body path", tt.name)
+			}
+		})
+	}
+}
+
+func TestCache_HTTPCache_NilReceiver_Bad(t *testing.T) {
+	var httpCache *cache.HTTPCache
+	req := cache.CachedRequest{URL: "https://example.com", Method: "GET"}
+	resp := cache.CachedResponse{BodyPath: "responses/a.bin"}
+
+	if _, err := httpCache.Match(req); err == nil {
+		t.Fatal("expected Match to fail on nil http cache")
+	}
+	if err := httpCache.Put(req, cache.CachedResponse{}, []byte("body")); err == nil {
+		t.Fatal("expected Put to fail on nil http cache")
+	}
+	if _, err := httpCache.ReadBody(&resp); err == nil {
+		t.Fatal("expected ReadBody to fail on nil http cache")
+	}
+	if err := httpCache.Delete(req); err == nil {
+		t.Fatal("expected Delete to fail on nil http cache")
+	}
+	if _, err := httpCache.Keys(); err == nil {
+		t.Fatal("expected Keys to fail on nil http cache")
+	}
+}
+
+func TestCache_HTTPCache_LegacyMetadata_Good(t *testing.T) {
+	// Missing seam: readResponseRecord's legacy flat-JSON fallback cannot be
+	// reached through the current decoder because a flat response JSON document
+	// still unmarshals into cachedResponseRecord without error.
+	t.Skip("missing seam for legacy response metadata fallback")
+}
+
+func TestCache_HTTPCache_Put_Bad(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-put-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("put-bad")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	if err := httpCache.Put(cache.CachedRequest{}, cache.CachedResponse{}, []byte("body")); err == nil {
+		t.Fatal("expected Put to reject empty request key")
+	}
+}
+
+func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-put-ugly")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("put-ugly")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{URL: "https://example.com/style.css", Method: "GET"}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".json"
+	binPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".bin"
+	medium.writeErr[metaPath] = errors.New("metadata boom")
+
+	if err := httpCache.Put(req, cache.CachedResponse{}, []byte("body")); err == nil {
+		t.Fatal("expected Put to surface metadata write failure")
+	}
+	if _, ok := medium.Files[binPath]; ok {
+		t.Fatal("expected response body to be cleaned up after metadata write failure")
+	}
+}
+
+func TestCache_HTTPCache_Keys_Good(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-keys")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("keys")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	body := []byte("body")
+	if err := httpCache.Put(cache.CachedRequest{URL: "https://example.com/a", Method: "GET"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := httpCache.Put(cache.CachedRequest{URL: "https://example.com/a", Method: "HEAD"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
+		t.Fatalf("Put duplicate URL failed: %v", err)
+	}
+	if err := httpCache.Put(cache.CachedRequest{URL: "https://example.com/b", Method: "GET"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	urls, err := httpCache.Keys()
+	if err != nil {
+		t.Fatalf("Keys failed: %v", err)
+	}
+	if len(urls) != 2 {
+		t.Fatalf("expected deduped URLs, got %v", urls)
+	}
+	if urls[0] != "https://example.com/a" || urls[1] != "https://example.com/b" {
+		t.Fatalf("unexpected sorted URLs: %v", urls)
+	}
+}
+
+func TestCache_HTTPCache_Match_Bad(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-match-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-bad")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	matched, err := httpCache.Match(cache.CachedRequest{URL: "https://example.com/missing", Method: "GET"})
+	if err != nil {
+		t.Fatalf("Match returned unexpected error: %v", err)
+	}
+	if matched != nil {
+		t.Fatal("expected missing cached response to return nil")
 	}
 }
