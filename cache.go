@@ -14,7 +14,6 @@ import (
 
 	"dappco.re/go/core"
 	coreio "dappco.re/go/core/io"
-	"dappco.re/go/core/store"
 )
 
 // DefaultTTL is the default cache expiry time.
@@ -214,7 +213,7 @@ func (c *Cache) set(key string, data any, ttl time.Duration) error {
 		ExpiresAt: now.Add(ttl),
 	}
 
-	entryBytes, err := store.MarshalIndent(entry, "", "  ")
+	entryBytes, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return core.E("cache.Set", "failed to marshal cache entry", err)
 	}
@@ -318,17 +317,18 @@ func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.
 		ExpiresAt:   now.Add(ttl),
 	}
 
-	metaBytes, err := store.MarshalIndent(meta, "", "  ")
+	metaBytes, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return core.E("cache.setBinary", "failed to marshal binary metadata", err)
 	}
 
-	if err := c.medium.Write(jsonPath, string(metaBytes)); err != nil {
-		return core.E("cache.setBinary", "failed to write binary metadata", err)
-	}
-
 	if err := c.medium.Write(binPath, string(data)); err != nil {
 		return core.E("cache.setBinary", "failed to write binary payload", err)
+	}
+
+	if err := c.medium.Write(jsonPath, string(metaBytes)); err != nil {
+		_ = c.medium.Delete(binPath)
+		return core.E("cache.setBinary", "failed to write binary metadata", err)
 	}
 
 	return nil
@@ -397,7 +397,12 @@ func (c *Cache) DeleteMany(keys ...string) error {
 }
 
 func (c *Cache) listJSONKeys() ([]string, error) {
-	return c.collectJSONKeys("")
+	keys, err := c.collectJSONKeys("")
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(keys)
+	return keys, nil
 }
 
 func (c *Cache) collectJSONKeys(prefix string) ([]string, error) {
@@ -1002,16 +1007,17 @@ func (hc *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []byte) er
 
 	resp.CachedAt = time.Now()
 	resp.BodyPath = core.JoinPath("responses", key+".bin")
-	meta, err := store.MarshalIndent(resp, "", "  ")
+	meta, err := json.MarshalIndent(resp, "", "  ")
 	if err != nil {
 		return core.E("cache.HTTPCache.Put", "failed to marshal cached response", err)
 	}
 
-	if err := hc.medium.Write(hc.responseMetaPath(key), string(meta)); err != nil {
-		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
-	}
 	if err := hc.medium.Write(hc.responseBinaryPath(key), string(body)); err != nil {
 		return core.E("cache.HTTPCache.Put", "failed to write cached response body", err)
+	}
+	if err := hc.medium.Write(hc.responseMetaPath(key), string(meta)); err != nil {
+		_ = hc.medium.Delete(hc.responseBinaryPath(key))
+		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
 	}
 
 	return nil
