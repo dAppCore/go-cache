@@ -844,7 +844,7 @@ func (scopedCache *ScopedCache) Age(key string) time.Duration {
 type CacheStorage struct {
 	medium      coreio.Medium
 	baseDir     string
-	namedCaches map[string]*HTTPCache
+	caches      map[string]*HTTPCache
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
@@ -872,7 +872,7 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 	return &CacheStorage{
 		medium:      medium,
 		baseDir:     baseDir,
-		namedCaches: make(map[string]*HTTPCache),
+		caches:      make(map[string]*HTTPCache),
 	}, nil
 }
 
@@ -884,14 +884,14 @@ func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
 	if storage == nil {
 		return nil, core.E("cache.CacheStorage.Open", "cache storage is nil", nil)
 	}
-	if storage.namedCaches == nil {
-		storage.namedCaches = make(map[string]*HTTPCache)
+	if storage.caches == nil {
+		storage.caches = make(map[string]*HTTPCache)
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Open", name); err != nil {
 		return nil, err
 	}
 
-	if httpCache, ok := storage.namedCaches[name]; ok {
+	if httpCache, ok := storage.caches[name]; ok {
 		return httpCache, nil
 	}
 
@@ -905,7 +905,7 @@ func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
 		medium:  storage.medium,
 		baseDir: cacheDir,
 	}
-	storage.namedCaches[name] = httpCache
+	storage.caches[name] = httpCache
 	return httpCache, nil
 }
 
@@ -925,7 +925,7 @@ func (storage *CacheStorage) Delete(name string) error {
 		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
 	}
 
-	delete(storage.namedCaches, name)
+	delete(storage.caches, name)
 	return nil
 }
 
@@ -959,8 +959,8 @@ func (storage *CacheStorage) Keys() ([]string, error) {
 		}
 	}
 
-	names := make(map[string]struct{}, len(storage.namedCaches)+len(entries))
-	for name := range storage.namedCaches {
+	names := make(map[string]struct{}, len(storage.caches)+len(entries))
+	for name := range storage.caches {
 		names[name] = struct{}{}
 	}
 	for _, entry := range entries {
@@ -985,7 +985,7 @@ func (storage *CacheStorage) Close() error {
 	if storage == nil {
 		return nil
 	}
-	storage.namedCaches = make(map[string]*HTTPCache)
+	storage.caches = make(map[string]*HTTPCache)
 	return nil
 }
 
