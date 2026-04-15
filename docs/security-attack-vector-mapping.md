@@ -1,6 +1,6 @@
 # Security Attack Vector Mapping
 
-Scope: `dappco.re/go/core/cache` public API and backend read paths in `cache.go`. This package exposes a library surface only; it has no HTTP handlers or CLI argument parsing in-repo.
+Scope: `dappco.re/go/cache` public API and backend read paths in `cache.go`. This package exposes a library surface only; it has no HTTP handlers or CLI argument parsing in-repo.
 
 | Function | File:line | Input source | Flows into | Current validation | Potential attack vector |
 | --- | --- | --- | --- | --- | --- |

@@ -8,7 +8,7 @@ description: File-based caching with TTL expiry, storage-agnostic via the go-io 
 `go-cache` is a lightweight, storage-agnostic caching library for Go. It stores
 JSON-serialised entries with automatic TTL expiry and path-traversal protection.
 
-**Module path:** `forge.lthn.ai/core/go-cache`
+**Module path:** `dappco.re/go/cache`
 
 **Licence:** EUPL-1.2
 
@@ -20,7 +20,7 @@ import (
     "fmt"
     "time"
 
-    "forge.lthn.ai/core/go-cache"
+    "dappco.re/go/cache"
 )
 
 func main() {
@@ -68,8 +68,7 @@ func main() {
 
 | Module                        | Version | Role                                       |
 |-------------------------------|---------|---------------------------------------------|
-| `forge.lthn.ai/core/go-io`   | v0.0.3  | Storage abstraction (`Medium` interface)    |
-| `forge.lthn.ai/core/go-log`  | v0.0.1  | Structured logging (indirect, via `go-io`)  |
+| `dappco.re/go/core/io`   | v0.4.1  | Storage abstraction (`Medium` interface)    |
 
 There are no other runtime dependencies. The test suite uses the standard
 library only (plus the `MockMedium` from `go-io`).
