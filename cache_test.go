@@ -530,6 +530,37 @@ func TestCache_Scoped_Good(t *testing.T) {
 	}
 }
 
+func TestCache_Scoped_ClearScope_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-scoped-clear-scope", time.Minute)
+
+	app := c.Scoped("https://app.example.com")
+	admin := c.Scoped("https://admin.example.com")
+
+	if err := app.Set("user/profile", "app-user"); err != nil {
+		t.Fatalf("app Set failed: %v", err)
+	}
+	if err := admin.Set("user/profile", "admin-user"); err != nil {
+		t.Fatalf("admin Set failed: %v", err)
+	}
+
+	if err := app.ClearScope("https://app.example.com"); err != nil {
+		t.Fatalf("scoped ClearScope failed: %v", err)
+	}
+
+	var appVal string
+	var adminVal string
+
+	found, err := app.Get("user/profile", &appVal)
+	if err != nil || found {
+		t.Fatalf("expected app scope to be cleared, found=%v err=%v", found, err)
+	}
+
+	found, err = admin.Get("user/profile", &adminVal)
+	if err != nil || !found || adminVal != "admin-user" {
+		t.Fatalf("expected admin scope to remain, found=%v val=%q err=%v", found, adminVal, err)
+	}
+}
+
 func TestCache_Invalidate_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate", time.Minute)
 

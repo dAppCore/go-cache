@@ -766,6 +766,13 @@ func (c *ScopedCache) Clear() error {
 	return c.parent.clearScope(c.prefix)
 }
 
+func (c *ScopedCache) ClearScope(origin string) error {
+	if c == nil || c.parent == nil {
+		return core.E("cache.Scoped.ClearScope", "scoped cache is nil", nil)
+	}
+	return c.parent.ClearScope(origin)
+}
+
 func (c *ScopedCache) OnInvalidate(trigger string, fn InvalidateFunc) {
 	if c == nil || c.parent == nil {
 		return
