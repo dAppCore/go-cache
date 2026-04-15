@@ -128,6 +128,20 @@ func (cache *Cache) Path(key string) (string, error) {
 	return path, nil
 }
 
+// entryPaths resolves the JSON and binary file paths for a cache key.
+//
+//	jsonPath, binPath, err := c.entryPaths("github/acme/repos")
+func (cache *Cache) entryPaths(key string) (string, string, error) {
+	jsonPath, err := cache.Path(key)
+	if err != nil {
+		return "", "", err
+	}
+
+	baseDir := absolutePath(cache.baseDir)
+	binaryPath := absolutePath(core.JoinPath(baseDir, key+".bin"))
+	return jsonPath, binaryPath, nil
+}
+
 // Get unmarshals the cached item into dest if it exists and has not expired.
 //
 //	found, err := c.Get("github/acme/repos", &repos)
@@ -193,7 +207,7 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 		return err
 	}
 
-	path, err := cache.Path(key)
+	path, _, err := cache.entryPaths(key)
 	if err != nil {
 		return err
 	}
@@ -252,12 +266,10 @@ func (cache *Cache) removeEntryFiles(key string) (bool, error) {
 	if err := cache.ensureReady("cache.removeEntryFiles"); err != nil {
 		return false, err
 	}
-	if err := ensureSafeKey(key); err != nil {
+	jsonPath, binaryPath, err := cache.entryPaths(key)
+	if err != nil {
 		return false, err
 	}
-
-	jsonPath := absolutePath(core.JoinPath(cache.baseDir, key+".json"))
-	binaryPath := absolutePath(core.JoinPath(cache.baseDir, key+".bin"))
 
 	removed := false
 	if err := cache.medium.Delete(jsonPath); err != nil {
@@ -305,7 +317,8 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 	if err := cache.ensureReady("cache.setBinary"); err != nil {
 		return err
 	}
-	if err := ensureSafeKey(key); err != nil {
+	jsonPath, binaryPath, err := cache.entryPaths(key)
+	if err != nil {
 		return err
 	}
 
@@ -315,9 +328,6 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 	if ttl == 0 && useDefaultTTL {
 		ttl = cache.defaultTTL()
 	}
-
-	jsonPath := absolutePath(core.JoinPath(cache.baseDir, key+".json"))
-	binPath := absolutePath(core.JoinPath(cache.baseDir, key+".bin"))
 
 	if err := cache.medium.EnsureDir(core.PathDir(jsonPath)); err != nil {
 		return core.E("cache.setBinary", "failed to create directory", err)
@@ -336,12 +346,12 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 		return core.E("cache.setBinary", "failed to marshal binary metadata", err)
 	}
 
-	if err := cache.medium.Write(binPath, string(data)); err != nil {
+	if err := cache.medium.Write(binaryPath, string(data)); err != nil {
 		return core.E("cache.setBinary", "failed to write binary payload", err)
 	}
 
 	if err := cache.medium.Write(jsonPath, string(metaBytes)); err != nil {
-		_ = cache.medium.Delete(binPath)
+		_ = cache.medium.Delete(binaryPath)
 		return core.E("cache.setBinary", "failed to write binary metadata", err)
 	}
 
@@ -355,11 +365,11 @@ func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
 	if err := cache.ensureReady("cache.GetBinary"); err != nil {
 		return nil, false, err
 	}
-	if err := ensureSafeKey(key); err != nil {
+	metaPath, binaryPath, err := cache.entryPaths(key)
+	if err != nil {
 		return nil, false, err
 	}
 
-	metaPath := absolutePath(core.JoinPath(cache.baseDir, key+".json"))
 	rawMeta, err := cache.medium.Read(metaPath)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
@@ -378,8 +388,7 @@ func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	bodyPath := absolutePath(core.JoinPath(cache.baseDir, key+".bin"))
-	body, err := cache.medium.Read(bodyPath)
+	body, err := cache.medium.Read(binaryPath)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
@@ -399,14 +408,25 @@ func (cache *Cache) DeleteMany(keys ...string) error {
 		return err
 	}
 
-	for _, key := range keys {
-		if err := ensureSafeKey(key); err != nil {
-			return err
-		}
+	type entryFileSet struct {
+		jsonPath   string
+		binaryPath string
 	}
 
+	resolved := make([]entryFileSet, 0, len(keys))
 	for _, key := range keys {
-		if _, err := cache.removeEntryFiles(key); err != nil {
+		jsonPath, binaryPath, err := cache.entryPaths(key)
+		if err != nil {
+			return err
+		}
+		resolved = append(resolved, entryFileSet{jsonPath: jsonPath, binaryPath: binaryPath})
+	}
+
+	for _, paths := range resolved {
+		if err := cache.medium.Delete(paths.jsonPath); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := cache.medium.Delete(paths.binaryPath); err != nil && !core.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -428,6 +448,7 @@ func (cache *Cache) collectJSONKeys(prefix string) ([]string, error) {
 	if prefix != "" {
 		listPath = core.JoinPath(cache.baseDir, prefix)
 	}
+
 	entries, err := cache.medium.List(listPath)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
@@ -436,28 +457,28 @@ func (cache *Cache) collectJSONKeys(prefix string) ([]string, error) {
 		return nil, core.E("cache.collectJSONKeys", "failed to list cache directory", err)
 	}
 
-	var out []string
+	var keys []string
 	for _, entry := range entries {
 		name := entry.Name()
-		childRel := name
+		childPrefix := name
 		if prefix != "" {
-			childRel = core.JoinPath(prefix, name)
+			childPrefix = core.JoinPath(prefix, name)
 		}
 
 		if entry.IsDir() {
-			child, err := cache.collectJSONKeys(childRel)
+			childKeys, err := cache.collectJSONKeys(childPrefix)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, child...)
+			keys = append(keys, childKeys...)
 			continue
 		}
 
 		if core.HasSuffix(name, ".json") {
-			out = append(out, core.TrimSuffix(childRel, ".json"))
+			keys = append(keys, core.TrimSuffix(childPrefix, ".json"))
 		}
 	}
-	return out, nil
+	return keys, nil
 }
 
 func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
@@ -477,6 +498,21 @@ func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
 		}
 	}
 	return matched, nil
+}
+
+func (cache *Cache) clearScope(prefix string) error {
+	keys, err := cache.keysByPattern(prefix + "/*")
+	if err != nil {
+		return err
+	}
+
+	for _, key := range keys {
+		if _, err := cache.removeEntryFiles(key); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // matchKeyPattern reports whether key matches the glob pattern.
@@ -645,21 +681,6 @@ func (cache *Cache) ClearScope(origin string) error {
 		return err
 	}
 	return cache.clearScope(prefix)
-}
-
-func (cache *Cache) clearScope(prefix string) error {
-	keys, err := cache.keysByPattern(prefix + "/*")
-	if err != nil {
-		return err
-	}
-
-	for _, key := range keys {
-		if _, err := cache.removeEntryFiles(key); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (cache *Cache) defaultTTL() time.Duration {
