@@ -1183,6 +1183,9 @@ func (httpCache *HTTPCache) readResponseRecord(key string) (*cachedResponseRecor
 	var record cachedResponseRecord
 	recordResult := core.JSONUnmarshalString(raw, &record)
 	if recordResult.OK {
+		if err := validateCachedResponseRecord(key, &record); err != nil {
+			return nil, err
+		}
 		return &record, nil
 	}
 
@@ -1197,10 +1200,15 @@ func (httpCache *HTTPCache) readResponseRecord(key string) (*cachedResponseRecor
 		return nil, err
 	}
 
-	return &cachedResponseRecord{
+	record = cachedResponseRecord{
 		Request:  req,
 		Response: response,
-	}, nil
+	}
+	if err := validateCachedResponseRecord(key, &record); err != nil {
+		return nil, err
+	}
+
+	return &record, nil
 }
 
 // Match finds a cached response for request.
@@ -1237,8 +1245,15 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 	if err != nil {
 		return err
 	}
+	resp.BodyPath = core.JoinPath("responses", key+".bin")
+	if err := validateCachedRequest(req); err != nil {
+		return core.E("cache.HTTPCache.Put", "invalid cached request", err)
+	}
 	if resp.Headers == nil {
 		resp.Headers = make(map[string]string)
+	}
+	if err := validateCachedResponse(resp); err != nil {
+		return core.E("cache.HTTPCache.Put", "invalid cached response", err)
 	}
 
 	if err := httpCache.medium.EnsureDir(httpCache.storagePath("responses")); err != nil {
@@ -1246,7 +1261,6 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 	}
 
 	resp.CachedAt = time.Now()
-	resp.BodyPath = core.JoinPath("responses", key+".bin")
 	record := cachedResponseRecord{
 		Request:  req,
 		Response: resp,
@@ -1288,6 +1302,97 @@ func (httpCache *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 		return nil, core.E("cache.HTTPCache.ReadBody", "failed to read response body", err)
 	}
 	return []byte(body), nil
+}
+
+func validateCachedResponseRecord(key string, record *cachedResponseRecord) error {
+	if record == nil {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached response record is nil", nil)
+	}
+
+	req, err := decodeRequestKey(key)
+	if err != nil {
+		return err
+	}
+	if record.Request != req {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached request metadata does not match cache key", nil)
+	}
+
+	if err := validateCachedResponse(record.Response); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateCachedRequest(req CachedRequest) error {
+	if core.Trim(req.URL) == "" || core.Trim(req.Method) == "" {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request URL and method are required", nil)
+	}
+	if hasHTTPDangerousBytes(req.URL) || hasHTTPDangerousBytes(req.Method) {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request contains control characters", nil)
+	}
+	if !isHTTPToken(req.Method) {
+		return core.E("cache.HTTPCache.validateCachedRequest", "invalid HTTP method", nil)
+	}
+	return nil
+}
+
+func validateCachedResponse(resp CachedResponse) error {
+	if resp.Status < 100 || resp.Status > 599 {
+		return core.E("cache.HTTPCache.validateCachedResponse", "invalid HTTP status", nil)
+	}
+	if hasHTTPDangerousBytes(resp.StatusText) {
+		return core.E("cache.HTTPCache.validateCachedResponse", "invalid HTTP status text", nil)
+	}
+	if err := ensureSafeResponseBodyPath(resp.BodyPath); err != nil {
+		return core.E("cache.HTTPCache.validateCachedResponse", "invalid response body path", err)
+	}
+	for name, value := range resp.Headers {
+		if err := validateHTTPHeaderName(name); err != nil {
+			return core.E("cache.HTTPCache.validateCachedResponse", "invalid response header name", err)
+		}
+		if hasHTTPDangerousBytes(value) {
+			return core.E("cache.HTTPCache.validateCachedResponse", "invalid response header value", nil)
+		}
+	}
+	return nil
+}
+
+func validateHTTPHeaderName(name string) error {
+	if name == "" {
+		return core.E("cache.HTTPCache.validateHTTPHeaderName", "header name is empty", nil)
+	}
+	if !isHTTPToken(name) {
+		return core.E("cache.HTTPCache.validateHTTPHeaderName", "invalid header name", nil)
+	}
+	return nil
+}
+
+func hasHTTPDangerousBytes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\r', '\n', 0x00:
+			return true
+		}
+	}
+	return false
+}
+
+func isHTTPToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Delete removes a cached request/response pair.

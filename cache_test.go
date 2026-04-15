@@ -1471,6 +1471,61 @@ func TestCache_HTTPCache_Put_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-put-metadata-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("put-metadata-bad")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+
+	tests := []struct {
+		name string
+		resp cache.CachedResponse
+	}{
+		{
+			name: "status",
+			resp: cache.CachedResponse{Status: 0, StatusText: "OK"},
+		},
+		{
+			name: "header-name",
+			resp: cache.CachedResponse{
+				Status:     200,
+				StatusText: "OK",
+				Headers:    map[string]string{"X-Inject\r\ned": "value"},
+			},
+		},
+		{
+			name: "header-value",
+			resp: cache.CachedResponse{
+				Status:     200,
+				StatusText: "OK",
+				Headers:    map[string]string{"Content-Type": "text/plain\r\nX-Injected: yes"},
+			},
+		},
+		{
+			name: "status-text",
+			resp: cache.CachedResponse{Status: 200, StatusText: "OK\r\nInjected"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := httpCache.Put(req, tt.resp, []byte("body")); err == nil {
+				t.Fatalf("expected Put to reject %s metadata", tt.name)
+			}
+		})
+	}
+}
+
 func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-put-ugly")
@@ -1494,6 +1549,49 @@ func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
 	}
 	if _, ok := medium.Files[binPath]; ok {
 		t.Fatal("expected response body to be cleaned up after metadata write failure")
+	}
+}
+
+func TestCache_HTTPCache_Match_RejectsTamperedMetadata(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-tampered")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-tampered")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-match-tampered/match-tampered/responses/" + key + ".json"
+
+	record := struct {
+		Request  cache.CachedRequest  `json:"request"`
+		Response cache.CachedResponse `json:"response"`
+	}{
+		Request: req,
+		Response: cache.CachedResponse{
+			Status:     200,
+			StatusText: "OK",
+			Headers:    map[string]string{"X-Inject\r\ned": "value"},
+			BodyPath:   "responses/" + key + ".bin",
+		},
+	}
+
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	medium.Files[metaPath] = string(raw)
+
+	if matched, err := httpCache.Match(req); err == nil || matched != nil {
+		t.Fatalf("expected Match to reject tampered metadata, matched=%v err=%v", matched, err)
 	}
 }
 
