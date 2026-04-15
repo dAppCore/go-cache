@@ -731,12 +731,21 @@ func ensureSafeResponseBodyPath(path string) error {
 		return core.E("cache.validateResponseBodyPath", "invalid body path", nil)
 	}
 
-	parts := core.Split(path, "/")
-	if len(parts) != 2 || parts[0] != "responses" || parts[1] == "" || !core.HasSuffix(parts[1], ".bin") {
+	normalized := normalizePath(path)
+	if !core.HasPrefix(normalized, "responses/") || !core.HasSuffix(normalized, ".bin") {
 		return core.E("cache.validateResponseBodyPath", "invalid body path: expected responses/<key>.bin", nil)
 	}
-	if err := ensureSafeKey(core.TrimSuffix(parts[1], ".bin")); err != nil {
-		return core.E("cache.validateResponseBodyPath", "invalid body path", err)
+
+	rel := core.TrimPrefix(normalized, "responses/")
+	rel = core.TrimSuffix(rel, ".bin")
+	if rel == "" {
+		return core.E("cache.validateResponseBodyPath", "invalid body path", nil)
+	}
+
+	for _, segment := range core.Split(rel, "/") {
+		if err := ensureSafeKey(segment); err != nil {
+			return core.E("cache.validateResponseBodyPath", "invalid body path", err)
+		}
 	}
 
 	return nil
