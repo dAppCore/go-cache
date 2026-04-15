@@ -337,10 +337,24 @@ func TestCache_GitHubReposKey_Good(t *testing.T) {
 	}
 }
 
+func TestCache_GitHubReposKey_EscapesUnsafeSegments(t *testing.T) {
+	key := cache.GitHubReposKey("my/org")
+	if key != "github/my%2Forg/repos" {
+		t.Fatalf("unexpected escaped GitHubReposKey: %q", key)
+	}
+}
+
 func TestCache_GitHubRepoKey_Good(t *testing.T) {
 	key := cache.GitHubRepoKey("myorg", "myrepo")
 	if key != "github/myorg/myrepo/meta" {
 		t.Errorf("unexpected GitHubRepoKey: %q", key)
+	}
+}
+
+func TestCache_GitHubRepoKey_EscapesUnsafeSegments(t *testing.T) {
+	key := cache.GitHubRepoKey("my/org", "widgets/v2")
+	if key != "github/my%2Forg/widgets%2Fv2/meta" {
+		t.Fatalf("unexpected escaped GitHubRepoKey: %q", key)
 	}
 }
 

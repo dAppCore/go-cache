@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
+	"net/url"
 	"os"
 	"slices"
 	"time"
@@ -1176,14 +1177,18 @@ func (c *Cache) Age(key string) time.Duration {
 //
 //	key := cache.GitHubReposKey("acme")
 func GitHubReposKey(org string) string {
-	return core.JoinPath("github", org, "repos")
+	return core.JoinPath("github", encodePathSegment(org), "repos")
 }
 
 // GitHubRepoKey returns the cache key used for a repository metadata entry.
 //
 //	key := cache.GitHubRepoKey("acme", "widgets")
 func GitHubRepoKey(org, repo string) string {
-	return core.JoinPath("github", org, repo, "meta")
+	return core.JoinPath("github", encodePathSegment(org), encodePathSegment(repo), "meta")
+}
+
+func encodePathSegment(segment string) string {
+	return url.PathEscape(segment)
 }
 
 func pathSeparator() string {
