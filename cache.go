@@ -39,6 +39,12 @@ type Cache struct {
 }
 
 // Entry is the serialized cache record written to the backing Medium.
+//
+//	entry := cache.Entry{
+//		Data:      []byte(`{"foo":"bar"}`),
+//		CachedAt:  time.Now(),
+//		ExpiresAt: time.Now().Add(time.Hour),
+//	}
 type Entry struct {
 	Data      json.RawMessage `json:"data"`
 	CachedAt  time.Time       `json:"cached_at"`
