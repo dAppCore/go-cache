@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io/fs"
 	"slices"
 	"time"
@@ -33,9 +34,9 @@ type Cache struct {
 
 // Entry is the serialized cache record written to the backing Medium.
 type Entry struct {
-	Data      store.RawMessage `json:"data"`
-	CachedAt  time.Time        `json:"cached_at"`
-	ExpiresAt time.Time        `json:"expires_at"`
+	Data      json.RawMessage `json:"data"`
+	CachedAt  time.Time       `json:"cached_at"`
+	ExpiresAt time.Time       `json:"expires_at"`
 }
 
 // BinaryMeta is the metadata for binary cache payloads.
