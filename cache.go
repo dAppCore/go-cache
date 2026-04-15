@@ -381,7 +381,7 @@ func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
 	var meta BinaryMeta
 	metaResult := core.JSONUnmarshalString(rawMeta, &meta)
 	if !metaResult.OK {
-		return nil, false, core.E("cache.GetBinary", "failed to unmarshal binary metadata", metaResult.Value.(error))
+		return nil, false, nil
 	}
 
 	if time.Now().After(meta.ExpiresAt) {
@@ -1075,7 +1075,7 @@ func (httpCache *HTTPCache) readResponse(key string) (*CachedResponse, error) {
 	var response CachedResponse
 	responseResult := core.JSONUnmarshalString(raw, &response)
 	if !responseResult.OK {
-		return nil, core.E("cache.HTTPCache.readResponse", "failed to unmarshal cached response", responseResult.Value.(error))
+		return nil, nil
 	}
 
 	return &response, nil
