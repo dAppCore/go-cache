@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"dappco.re/go/cache"
 	"dappco.re/go/core"
-	"dappco.re/go/core/cache"
 	coreio "dappco.re/go/core/io"
 )
 

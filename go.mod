@@ -1,4 +1,4 @@
-module dappco.re/go/core/cache
+module dappco.re/go/cache
 
 go 1.26.0
 

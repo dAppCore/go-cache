@@ -1075,6 +1075,7 @@ func (hc *HTTPCache) Keys() ([]string, error) {
 		return nil, core.E("cache.HTTPCache.Keys", "failed to list response entries", err)
 	}
 
+	seen := make(map[string]struct{})
 	var urls []string
 	for _, entry := range entries {
 		name := entry.Name()
@@ -1086,6 +1087,10 @@ func (hc *HTTPCache) Keys() ([]string, error) {
 		if err != nil {
 			continue
 		}
+		if _, ok := seen[req.URL]; ok {
+			continue
+		}
+		seen[req.URL] = struct{}{}
 		urls = append(urls, req.URL)
 	}
 
