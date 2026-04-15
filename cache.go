@@ -1180,15 +1180,32 @@ func (httpCache *HTTPCache) readResponseRecord(key string) (*cachedResponseRecor
 		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to read cached response", err)
 	}
 
-	var record cachedResponseRecord
-	recordResult := core.JSONUnmarshalString(raw, &record)
-	if recordResult.OK {
+	var envelope map[string]json.RawMessage
+	envelopeResult := core.JSONUnmarshalString(raw, &envelope)
+	if !envelopeResult.OK {
+		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", envelopeResult.Value.(error))
+	}
+
+	_, hasRequest := envelope["request"]
+	_, hasResponse := envelope["response"]
+
+	if hasRequest || hasResponse {
+		if !hasRequest || !hasResponse {
+			return nil, core.E("cache.HTTPCache.readResponseRecord", "cached response envelope is incomplete", nil)
+		}
+
+		var record cachedResponseRecord
+		recordResult := core.JSONUnmarshalString(raw, &record)
+		if !recordResult.OK {
+			return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", recordResult.Value.(error))
+		}
 		if err := validateCachedResponseRecord(key, &record); err != nil {
 			return nil, err
 		}
 		return &record, nil
 	}
 
+	var record cachedResponseRecord
 	var response CachedResponse
 	responseResult := core.JSONUnmarshalString(raw, &response)
 	if !responseResult.OK {

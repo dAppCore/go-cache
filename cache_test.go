@@ -1592,10 +1592,57 @@ func TestCache_HTTPCache_NilReceiver_Bad(t *testing.T) {
 }
 
 func TestCache_HTTPCache_LegacyMetadata_Good(t *testing.T) {
-	// Missing seam: readResponseRecord's legacy flat-JSON fallback cannot be
-	// reached through the current decoder because a flat response JSON document
-	// still unmarshals into cachedResponseRecord without error.
-	t.Skip("missing seam for legacy response metadata fallback")
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-legacy")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("legacy")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-legacy/legacy/responses/" + key + ".json"
+	binPath := "/tmp/cache-http-legacy/legacy/responses/" + key + ".bin"
+
+	legacy := cache.CachedResponse{
+		Status:     200,
+		StatusText: "OK",
+		Headers:    map[string]string{"Content-Type": "text/css"},
+		BodyPath:   "responses/" + key + ".bin",
+		CachedAt:   time.Now(),
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	medium.Files[metaPath] = string(raw)
+	medium.Files[binPath] = "body"
+
+	matched, err := httpCache.Match(req)
+	if err != nil {
+		t.Fatalf("Match failed: %v", err)
+	}
+	if matched == nil {
+		t.Fatal("expected legacy cached response to match")
+	}
+	if matched.Status != 200 || matched.StatusText != "OK" {
+		t.Fatalf("unexpected legacy response metadata: %+v", matched)
+	}
+
+	body, err := httpCache.ReadBody(matched)
+	if err != nil {
+		t.Fatalf("ReadBody failed: %v", err)
+	}
+	if string(body) != "body" {
+		t.Fatalf("unexpected legacy body: %q", body)
+	}
 }
 
 func TestCache_HTTPCache_Put_Bad(t *testing.T) {
