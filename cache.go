@@ -29,7 +29,7 @@ const DefaultTTL = 1 * time.Hour
 type Cache struct {
 	medium       coreio.Medium
 	baseDir      string
-	ttl          time.Duration
+	cacheTTL     time.Duration
 	invalidation map[string][]InvalidateFunc
 }
 
@@ -64,7 +64,7 @@ type InvalidateFunc func(trigger string) []string
 //
 //	c, err := cache.New(coreio.Local, "/tmp/cache", 5*time.Minute)
 //	c, err = cache.New(nil, "", 0) // uses Local, .core/cache, and DefaultTTL
-func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
+func New(medium coreio.Medium, baseDir string, cacheTTL time.Duration) (*Cache, error) {
 	if medium == nil {
 		medium = coreio.Local
 	}
@@ -80,12 +80,12 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 		baseDir = absolutePath(baseDir)
 	}
 
-	if ttl < 0 {
+	if cacheTTL < 0 {
 		return nil, core.E("cache.New", "ttl must be >= 0", nil)
 	}
 
-	if ttl == 0 {
-		ttl = DefaultTTL
+	if cacheTTL == 0 {
+		cacheTTL = DefaultTTL
 	}
 
 	if err := medium.EnsureDir(baseDir); err != nil {
@@ -95,7 +95,7 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 	return &Cache{
 		medium:       medium,
 		baseDir:      baseDir,
-		ttl:          ttl,
+		cacheTTL:     cacheTTL,
 		invalidation: make(map[string][]InvalidateFunc),
 	}, nil
 }
@@ -659,10 +659,10 @@ func (c *Cache) clearScope(prefix string) error {
 }
 
 func (c *Cache) defaultTTL() time.Duration {
-	if c.ttl <= 0 {
+	if c.cacheTTL <= 0 {
 		return DefaultTTL
 	}
-	return c.ttl
+	return c.cacheTTL
 }
 
 func ensureSafeKey(key string) error {
@@ -810,9 +810,9 @@ func (c *ScopedCache) Age(key string) time.Duration {
 //	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
 //	appCache, err := storage.Open("my-app-v1")
 type CacheStorage struct {
-	medium  coreio.Medium
-	baseDir string
-	caches  map[string]*HTTPCache
+	medium      coreio.Medium
+	baseDir     string
+	namedCaches map[string]*HTTPCache
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
@@ -838,9 +838,9 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 	}
 
 	return &CacheStorage{
-		medium:  medium,
-		baseDir: baseDir,
-		caches:  make(map[string]*HTTPCache),
+		medium:      medium,
+		baseDir:     baseDir,
+		namedCaches: make(map[string]*HTTPCache),
 	}, nil
 }
 
@@ -852,15 +852,15 @@ func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
 	if cs == nil {
 		return nil, core.E("cache.CacheStorage.Open", "cache storage is nil", nil)
 	}
-	if cs.caches == nil {
-		cs.caches = make(map[string]*HTTPCache)
+	if cs.namedCaches == nil {
+		cs.namedCaches = make(map[string]*HTTPCache)
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Open", name); err != nil {
 		return nil, err
 	}
 
-	if cache, ok := cs.caches[name]; ok {
-		return cache, nil
+	if httpCache, ok := cs.namedCaches[name]; ok {
+		return httpCache, nil
 	}
 
 	cacheDir := core.JoinPath(cs.baseDir, name)
@@ -868,13 +868,13 @@ func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
 		return nil, core.E("cache.CacheStorage.Open", "failed to create cache directory", err)
 	}
 
-	cache := &HTTPCache{
+	httpCache := &HTTPCache{
 		name:    name,
 		medium:  cs.medium,
 		baseDir: cacheDir,
 	}
-	cs.caches[name] = cache
-	return cache, nil
+	cs.namedCaches[name] = httpCache
+	return httpCache, nil
 }
 
 // Delete removes a named HTTP cache and all entries.
@@ -893,7 +893,7 @@ func (cs *CacheStorage) Delete(name string) error {
 		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
 	}
 
-	delete(cs.caches, name)
+	delete(cs.namedCaches, name)
 	return nil
 }
 
@@ -927,8 +927,8 @@ func (cs *CacheStorage) Keys() ([]string, error) {
 		}
 	}
 
-	names := make(map[string]struct{}, len(cs.caches)+len(entries))
-	for name := range cs.caches {
+	names := make(map[string]struct{}, len(cs.namedCaches)+len(entries))
+	for name := range cs.namedCaches {
 		names[name] = struct{}{}
 	}
 	for _, entry := range entries {
@@ -950,7 +950,7 @@ func (cs *CacheStorage) Close() error {
 	if cs == nil {
 		return nil
 	}
-	cs.caches = make(map[string]*HTTPCache)
+	cs.namedCaches = make(map[string]*HTTPCache)
 	return nil
 }
 
