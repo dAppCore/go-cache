@@ -722,7 +722,8 @@ func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 }
 
 func TestCache_HTTPCacheStorage_Good(t *testing.T) {
-	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http")
+	medium := coreio.NewMockMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http")
 	if err != nil {
 		t.Fatalf("NewCacheStorage failed: %v", err)
 	}
@@ -746,6 +747,41 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 
 	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
 		t.Fatalf("Put failed: %v", err)
+	}
+
+	metaEntries, err := medium.List("/tmp/cache-http/my-app-v1/responses")
+	if err != nil {
+		t.Fatalf("List response metadata failed: %v", err)
+	}
+	var metaPath string
+	for _, entry := range metaEntries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			metaPath = "/tmp/cache-http/my-app-v1/responses/" + entry.Name()
+			break
+		}
+	}
+	if metaPath == "" {
+		t.Fatal("expected response metadata file")
+	}
+
+	rawMeta, err := medium.Read(metaPath)
+	if err != nil {
+		t.Fatalf("Read response metadata failed: %v", err)
+	}
+
+	var stored struct {
+		Request  cache.CachedRequest  `json:"request"`
+		Response cache.CachedResponse `json:"response"`
+	}
+	result := core.JSONUnmarshalString(rawMeta, &stored)
+	if !result.OK {
+		t.Fatalf("failed to unmarshal stored metadata envelope: %v", result.Value)
+	}
+	if stored.Request.URL != req.URL || stored.Request.Method != req.Method {
+		t.Fatalf("unexpected stored request metadata: %+v", stored.Request)
+	}
+	if stored.Response.Status != resp.Status || stored.Response.StatusText != resp.StatusText {
+		t.Fatalf("unexpected stored response metadata: %+v", stored.Response)
 	}
 
 	matched, err := httpCache.Match(req)

@@ -1082,6 +1082,11 @@ type CachedResponse struct {
 	CachedAt   time.Time         `json:"cached_at"`
 }
 
+type cachedResponseRecord struct {
+	Request  CachedRequest  `json:"request"`
+	Response CachedResponse `json:"response"`
+}
+
 func (httpCache *HTTPCache) storagePath(parts ...string) string {
 	args := append([]string{httpCache.baseDir}, parts...)
 	return core.JoinPath(args...)
@@ -1118,22 +1123,36 @@ func (httpCache *HTTPCache) responseBinaryPath(key string) string {
 	return httpCache.storagePath("responses", key+".bin")
 }
 
-func (httpCache *HTTPCache) readResponse(key string) (*CachedResponse, error) {
+func (httpCache *HTTPCache) readResponseRecord(key string) (*cachedResponseRecord, error) {
 	raw, err := httpCache.medium.Read(httpCache.responseMetaPath(key))
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, core.E("cache.HTTPCache.readResponse", "failed to read cached response", err)
+		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to read cached response", err)
+	}
+
+	var record cachedResponseRecord
+	recordResult := core.JSONUnmarshalString(raw, &record)
+	if recordResult.OK {
+		return &record, nil
 	}
 
 	var response CachedResponse
 	responseResult := core.JSONUnmarshalString(raw, &response)
 	if !responseResult.OK {
-		return nil, core.E("cache.HTTPCache.readResponse", "failed to unmarshal cached response", responseResult.Value.(error))
+		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", responseResult.Value.(error))
 	}
 
-	return &response, nil
+	req, err := decodeRequestKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return &cachedResponseRecord{
+		Request:  req,
+		Response: response,
+	}, nil
 }
 
 // Match finds a cached response for request.
@@ -1148,7 +1167,11 @@ func (httpCache *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 		return nil, err
 	}
 
-	return httpCache.readResponse(key)
+	record, err := httpCache.readResponseRecord(key)
+	if err != nil || record == nil {
+		return nil, err
+	}
+	return &record.Response, nil
 }
 
 // Put stores a request/response pair and its body.
@@ -1176,7 +1199,11 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 
 	resp.CachedAt = time.Now()
 	resp.BodyPath = core.JoinPath("responses", key+".bin")
-	meta, err := json.MarshalIndent(resp, "", "  ")
+	record := cachedResponseRecord{
+		Request:  req,
+		Response: resp,
+	}
+	meta, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return core.E("cache.HTTPCache.Put", "failed to marshal cached response", err)
 	}
@@ -1263,15 +1290,18 @@ func (httpCache *HTTPCache) Keys() ([]string, error) {
 			continue
 		}
 		key := core.TrimSuffix(name, ".json")
-		req, err := decodeRequestKey(key)
+		record, err := httpCache.readResponseRecord(key)
 		if err != nil {
 			continue
 		}
-		if _, ok := seen[req.URL]; ok {
+		if record == nil || record.Request.URL == "" {
 			continue
 		}
-		seen[req.URL] = struct{}{}
-		urls = append(urls, req.URL)
+		if _, ok := seen[record.Request.URL]; ok {
+			continue
+		}
+		seen[record.Request.URL] = struct{}{}
+		urls = append(urls, record.Request.URL)
 	}
 
 	slices.Sort(urls)
