@@ -232,6 +232,11 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 		return err
 	}
 
+	snapshot, err := readFileSnapshot(cache.medium, path)
+	if err != nil {
+		return core.E("cache.set", "failed to inspect existing cache entry", err)
+	}
+
 	if err := cache.medium.EnsureDir(core.PathDir(path)); err != nil {
 		return core.E("cache.Set", "failed to create directory", err)
 	}
@@ -261,6 +266,7 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 	}
 
 	if err := cache.medium.Write(path, string(entryBytes)); err != nil {
+		_ = restoreFileSnapshot(cache.medium, snapshot)
 		return core.E("cache.set", "failed to write cache file", err)
 	}
 	return nil
@@ -342,6 +348,15 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 		return err
 	}
 
+	jsonSnapshot, err := readFileSnapshot(cache.medium, jsonPath)
+	if err != nil {
+		return core.E("cache.setBinary", "failed to inspect existing binary metadata", err)
+	}
+	binarySnapshot, err := readFileSnapshot(cache.medium, binaryPath)
+	if err != nil {
+		return core.E("cache.setBinary", "failed to inspect existing binary payload", err)
+	}
+
 	if ttl < 0 {
 		return core.E("cache.setBinary", "cache ttl must be >= 0", nil)
 	}
@@ -367,11 +382,14 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 	}
 
 	if err := cache.medium.Write(binaryPath, string(data)); err != nil {
+		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
+		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
 		return core.E("cache.setBinary", "failed to write binary payload", err)
 	}
 
 	if err := cache.medium.Write(jsonPath, string(metaBytes)); err != nil {
-		_ = cache.medium.Delete(binaryPath)
+		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
+		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
 		return core.E("cache.setBinary", "failed to write binary metadata", err)
 	}
 
@@ -1322,6 +1340,17 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 		return core.E("cache.HTTPCache.Put", "failed to create response directory", err)
 	}
 
+	metaPath := httpCache.responseMetaPath(key)
+	binaryPath := httpCache.responseBinaryPath(key)
+	metaSnapshot, err := readFileSnapshot(httpCache.medium, metaPath)
+	if err != nil {
+		return core.E("cache.HTTPCache.Put", "failed to inspect existing cached response metadata", err)
+	}
+	binarySnapshot, err := readFileSnapshot(httpCache.medium, binaryPath)
+	if err != nil {
+		return core.E("cache.HTTPCache.Put", "failed to inspect existing cached response body", err)
+	}
+
 	resp.CachedAt = time.Now()
 	record := cachedResponseRecord{
 		Request:  req,
@@ -1332,11 +1361,14 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 		return core.E("cache.HTTPCache.Put", "failed to marshal cached response", err)
 	}
 
-	if err := httpCache.medium.Write(httpCache.responseBinaryPath(key), string(body)); err != nil {
+	if err := httpCache.medium.Write(binaryPath, string(body)); err != nil {
+		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
+		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
 		return core.E("cache.HTTPCache.Put", "failed to write cached response body", err)
 	}
-	if err := httpCache.medium.Write(httpCache.responseMetaPath(key), string(meta)); err != nil {
-		_ = httpCache.medium.Delete(httpCache.responseBinaryPath(key))
+	if err := httpCache.medium.Write(metaPath, string(meta)); err != nil {
+		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
+		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
 		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
 	}
 
@@ -1546,6 +1578,40 @@ func (httpCache *HTTPCache) Keys() ([]string, error) {
 
 	slices.Sort(urls)
 	return urls, nil
+}
+
+type fileSnapshot struct {
+	path    string
+	existed bool
+	content string
+}
+
+func readFileSnapshot(medium coreio.Medium, path string) (fileSnapshot, error) {
+	content, err := medium.Read(path)
+	if err != nil {
+		if core.Is(err, fs.ErrNotExist) {
+			return fileSnapshot{path: path}, nil
+		}
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{
+		path:    path,
+		existed: true,
+		content: content,
+	}, nil
+}
+
+func restoreFileSnapshot(medium coreio.Medium, snapshot fileSnapshot) error {
+	if snapshot.path == "" {
+		return nil
+	}
+	if !snapshot.existed {
+		if err := medium.Delete(snapshot.path); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return medium.Write(snapshot.path, snapshot.content)
 }
 
 // Clear removes all cached items under the cache base directory.
