@@ -873,7 +873,7 @@ func ensureSafeCacheName(op, name string) error {
 	if core.Contains(name, "/") || core.Contains(name, `\`) {
 		return core.E(op, "invalid cache name", nil)
 	}
-	if core.Contains(name, "..") {
+	if name == "." || name == ".." {
 		return core.E(op, "invalid cache name", nil)
 	}
 	return nil

@@ -576,6 +576,36 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCacheStorage_DottedName_Good(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-dotted")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("api.v2-cache")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/api",
+		Method: "GET",
+	}
+	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
+
+	if err := httpCache.Put(req, resp, []byte("ok")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	names, err := storage.Keys()
+	if err != nil {
+		t.Fatalf("storage.Keys failed: %v", err)
+	}
+	if len(names) != 1 || names[0] != "api.v2-cache" {
+		t.Fatalf("expected dotted cache name to be listed, got %v", strings.Join(names, ","))
+	}
+}
+
 func TestCache_HTTPCacheDeleteMissing_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-delete-missing")
 	if err != nil {
