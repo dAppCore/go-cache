@@ -1165,10 +1165,60 @@ func TestCache_Scoped_Wrappers_Good(t *testing.T) {
 	}
 }
 
+func TestCache_Scoped_Scoped_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-scoped-scoped", time.Minute)
+
+	app := c.Scoped("https://app.example.com")
+	admin := app.Scoped("https://admin.example.com")
+
+	if admin == nil {
+		t.Fatal("expected Scoped on ScopedCache to return a cache")
+	}
+
+	if err := app.Set("user/profile", "app-user"); err != nil {
+		t.Fatalf("app Set failed: %v", err)
+	}
+	if err := admin.Set("user/profile", "admin-user"); err != nil {
+		t.Fatalf("admin Set failed: %v", err)
+	}
+
+	var appValue string
+	found, err := app.Get("user/profile", &appValue)
+	if err != nil || !found || appValue != "app-user" {
+		t.Fatalf("unexpected app scoped value: found=%v value=%q err=%v", found, appValue, err)
+	}
+
+	var adminValue string
+	found, err = admin.Get("user/profile", &adminValue)
+	if err != nil || !found || adminValue != "admin-user" {
+		t.Fatalf("unexpected admin scoped value: found=%v value=%q err=%v", found, adminValue, err)
+	}
+
+	if err := admin.Clear(); err != nil {
+		t.Fatalf("admin Clear failed: %v", err)
+	}
+
+	found, err = app.Get("user/profile", &appValue)
+	if err != nil || !found || appValue != "app-user" {
+		t.Fatalf("expected app scope to remain after clearing admin, found=%v value=%q err=%v", found, appValue, err)
+	}
+
+	found, err = admin.Get("user/profile", &adminValue)
+	if err != nil {
+		t.Fatalf("admin Get after clear failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected admin scope to be cleared")
+	}
+}
+
 func TestCache_Scoped_NilReceiver_Bad(t *testing.T) {
 	var scoped *cache.ScopedCache
 	var dest string
 
+	if scoped.Scoped("https://app.example.com") != nil {
+		t.Fatal("expected scoped Scoped to return nil on nil receiver")
+	}
 	if _, err := scoped.Path("x"); err == nil {
 		t.Fatal("expected scoped Path to fail on nil receiver")
 	}

@@ -766,6 +766,17 @@ func (scopedCache *ScopedCache) fullKey(key string) string {
 	return scopedCache.prefix + "/" + key
 }
 
+// Scoped returns a cache namespaced by a different origin.
+//
+//	admin := scoped.Scoped("https://admin.example.com")
+//	_ = admin.Set("user/profile", profile)
+func (scopedCache *ScopedCache) Scoped(origin string) *ScopedCache {
+	if scopedCache == nil || scopedCache.parent == nil {
+		return nil
+	}
+	return scopedCache.parent.Scoped(origin)
+}
+
 func (scopedCache *ScopedCache) Path(key string) (string, error) {
 	if scopedCache == nil || scopedCache.parent == nil {
 		return "", core.E("cache.Scoped.Path", "scoped cache is nil", nil)
