@@ -4,7 +4,7 @@
 package cache
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +26,17 @@ import (
 //
 //	c, err := cache.New(coreio.NewMockMedium(), "/tmp/cache", cache.DefaultTTL)
 const DefaultTTL = 1 * time.Hour
+
+const (
+	maxCacheKeyBytes            = 4096
+	maxCacheNameBytes           = 255
+	maxCachedRequestURLBytes    = 8192
+	maxCachedRequestMethodBytes = 32
+	maxCachedStatusTextBytes    = 1024
+	maxCachedHeaderNameBytes    = 256
+	maxCachedHeaderValueBytes   = 8192
+	maxCachedHeaderCount        = 128
+)
 
 // Cache stores JSON-encoded entries in a Medium-backed cache rooted at baseDir.
 //
@@ -710,6 +721,9 @@ func ensureSafeKey(key string) error {
 	if key == "" {
 		return core.E("cache.validateKey", "invalid empty key", nil)
 	}
+	if len(key) > maxCacheKeyBytes {
+		return core.E("cache.validateKey", "invalid key: too long", nil)
+	}
 	if core.Contains(key, "\\") {
 		return core.E("cache.validateKey", "invalid key: contains path separators", nil)
 	}
@@ -729,6 +743,9 @@ func ensureSafeKey(key string) error {
 func ensureSafeResponseBodyPath(path string) error {
 	if path == "" {
 		return core.E("cache.validateResponseBodyPath", "invalid empty body path", nil)
+	}
+	if len(path) > maxCacheKeyBytes {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: too long", nil)
 	}
 	if core.PathIsAbs(path) {
 		return core.E("cache.validateResponseBodyPath", "invalid body path: absolute paths are not allowed", nil)
@@ -763,7 +780,7 @@ type ScopedCache struct {
 }
 
 func scopePrefix(origin string) string {
-	sum := sha1.Sum([]byte(origin))
+	sum := sha256.Sum256([]byte(origin))
 	hash := hex.EncodeToString(sum[:])
 	return "scope_" + hash
 }
@@ -1017,6 +1034,9 @@ func (storage *CacheStorage) Delete(name string) error {
 func ensureSafeCacheName(op, name string) error {
 	if name == "" {
 		return core.E(op, "cache name is empty", nil)
+	}
+	if len(name) > maxCacheNameBytes {
+		return core.E(op, "invalid cache name: too long", nil)
 	}
 	if core.Contains(name, "/") || core.Contains(name, `\`) {
 		return core.E(op, "invalid cache name", nil)
@@ -1369,6 +1389,12 @@ func validateCachedRequest(req CachedRequest) error {
 	if core.Trim(req.URL) == "" || core.Trim(req.Method) == "" {
 		return core.E("cache.HTTPCache.validateCachedRequest", "request URL and method are required", nil)
 	}
+	if len(req.URL) > maxCachedRequestURLBytes {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request URL is too long", nil)
+	}
+	if len(req.Method) > maxCachedRequestMethodBytes {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request method is too long", nil)
+	}
 	if hasHTTPDangerousBytes(req.URL) || hasHTTPDangerousBytes(req.Method) {
 		return core.E("cache.HTTPCache.validateCachedRequest", "request contains control characters", nil)
 	}
@@ -1385,10 +1411,22 @@ func validateCachedResponse(resp CachedResponse) error {
 	if hasHTTPDangerousBytes(resp.StatusText) {
 		return core.E("cache.HTTPCache.validateCachedResponse", "invalid HTTP status text", nil)
 	}
+	if len(resp.StatusText) > maxCachedStatusTextBytes {
+		return core.E("cache.HTTPCache.validateCachedResponse", "HTTP status text is too long", nil)
+	}
 	if err := ensureSafeResponseBodyPath(resp.BodyPath); err != nil {
 		return core.E("cache.HTTPCache.validateCachedResponse", "invalid response body path", err)
 	}
+	if len(resp.Headers) > maxCachedHeaderCount {
+		return core.E("cache.HTTPCache.validateCachedResponse", "too many response headers", nil)
+	}
 	for name, value := range resp.Headers {
+		if len(name) > maxCachedHeaderNameBytes {
+			return core.E("cache.HTTPCache.validateCachedResponse", "response header name is too long", nil)
+		}
+		if len(value) > maxCachedHeaderValueBytes {
+			return core.E("cache.HTTPCache.validateCachedResponse", "response header value is too long", nil)
+		}
 		if err := validateHTTPHeaderName(name); err != nil {
 			return core.E("cache.HTTPCache.validateCachedResponse", "invalid response header name", err)
 		}

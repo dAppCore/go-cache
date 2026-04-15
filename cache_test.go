@@ -241,6 +241,7 @@ func TestCache_Path_Bad(t *testing.T) {
 		{name: "dot", key: "."},
 		{name: "backslash", key: `foo\bar`},
 		{name: "null-byte", key: "foo\x00bar"},
+		{name: "too-long", key: strings.Repeat("a", 4097)},
 	}
 
 	for _, tt := range tests {
@@ -1297,6 +1298,13 @@ func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 				return storage.Delete(`bad\cache`)
 			},
 		},
+		{
+			name: "open-too-long",
+			fn: func() error {
+				_, err := storage.Open(strings.Repeat("a", 256))
+				return err
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1747,6 +1755,20 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 				Method: "GET\r\nX-Injected: yes",
 			},
 		},
+		{
+			name: "url-too-long",
+			req: cache.CachedRequest{
+				URL:    "https://example.com/" + strings.Repeat("a", 8193),
+				Method: "GET",
+			},
+		},
+		{
+			name: "method-too-long",
+			req: cache.CachedRequest{
+				URL:    "https://example.com/style.css",
+				Method: strings.Repeat("G", 33),
+			},
+		},
 	}
 
 	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
@@ -1802,6 +1824,36 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 		{
 			name: "status-text",
 			resp: cache.CachedResponse{Status: 200, StatusText: "OK\r\nInjected"},
+		},
+		{
+			name: "header-name-too-long",
+			resp: cache.CachedResponse{
+				Status:     200,
+				StatusText: "OK",
+				Headers:    map[string]string{strings.Repeat("X", 257): "value"},
+			},
+		},
+		{
+			name: "header-value-too-long",
+			resp: cache.CachedResponse{
+				Status:     200,
+				StatusText: "OK",
+				Headers:    map[string]string{"Content-Type": strings.Repeat("a", 8193)},
+			},
+		},
+		{
+			name: "too-many-headers",
+			resp: func() cache.CachedResponse {
+				headers := make(map[string]string, 129)
+				for i := 0; i < 129; i++ {
+					headers[core.Concat("X-Test-", string(rune('a'+(i%26))), "-", string(rune('0'+((i/26)%10))))] = "value"
+				}
+				return cache.CachedResponse{
+					Status:     200,
+					StatusText: "OK",
+					Headers:    headers,
+				}
+			}(),
 		},
 	}
 
