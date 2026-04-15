@@ -3,7 +3,9 @@
 package cache_test
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -110,6 +112,15 @@ func readEntry(t *testing.T, raw string) cache.Entry {
 	}
 
 	return entry
+}
+
+func httpCacheStorageKey(req cache.CachedRequest) string {
+	sum := sha256.Sum256([]byte(req.Method + "\x00" + req.URL))
+	return hex.EncodeToString(sum[:])
+}
+
+func legacyHTTPCacheStorageKey(req cache.CachedRequest) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
 }
 
 func TestCache_New_Good(t *testing.T) {
@@ -1614,6 +1625,44 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCacheStorage_Good_LongURLUsesFixedWidthStorageKey(t *testing.T) {
+	medium := coreio.NewMockMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-long-url")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("long-url")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/" + strings.Repeat("a", 4000),
+		Method: "GET",
+	}
+	if err := httpCache.Put(req, cache.CachedResponse{Status: 200, StatusText: "OK"}, []byte("body")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	key := httpCacheStorageKey(req)
+	metaPath := "/tmp/cache-http-long-url/long-url/responses/" + key + ".json"
+	if _, ok := medium.Files[metaPath]; !ok {
+		t.Fatalf("expected fixed-width metadata path %q to exist", metaPath)
+	}
+	if len(key) != 64 {
+		t.Fatalf("expected SHA-256 hex key length 64, got %d", len(key))
+	}
+
+	matched, err := httpCache.Match(req)
+	if err != nil {
+		t.Fatalf("Match failed: %v", err)
+	}
+	if matched == nil {
+		t.Fatal("expected long URL response to match")
+	}
+}
+
 func TestCache_HTTPCacheStorage_Keys_Good_EmptyDir(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-empty-keys")
@@ -1846,7 +1895,7 @@ func TestCache_HTTPCacheReadBody_Bad_MissingPayload(t *testing.T) {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	bodyPath := "/tmp/cache-http-body-missing/body-missing/responses/" + key + ".bin"
 	delete(medium.Files, bodyPath)
 
@@ -1901,7 +1950,7 @@ func TestCache_HTTPCache_Delete_Bad_BackendFailure(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-delete-bad/delete-bad/responses/" + key + ".json"
 	medium.deleteErr[metaPath] = errors.New("boom")
 
@@ -1926,7 +1975,7 @@ func TestCache_HTTPCache_Match_Bad_IncompleteEnvelope(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := legacyHTTPCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-match-incomplete/match-incomplete/responses/" + key + ".json"
 	medium.Files[metaPath] = `{"request":{"url":"https://example.com/style.css","method":"GET"}}`
 
@@ -1967,7 +2016,7 @@ func TestCache_HTTPCache_LegacyMetadata_Good(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := legacyHTTPCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-legacy/legacy/responses/" + key + ".json"
 	binPath := "/tmp/cache-http-legacy/legacy/responses/" + key + ".bin"
 
@@ -2193,7 +2242,7 @@ func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
 	}
 
 	req := cache.CachedRequest{URL: "https://example.com/style.css", Method: "GET"}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".json"
 	binPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".bin"
 	medium.writeErr[metaPath] = errors.New("metadata boom")
@@ -2222,7 +2271,7 @@ func TestCache_HTTPCache_Match_Bad_RequestMismatch(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-match-mismatch/match-mismatch/responses/" + key + ".json"
 
 	record := struct {
@@ -2268,7 +2317,7 @@ func TestCache_HTTPCache_Match_Bad_BodyPath(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-match-body-path/match-body-path/responses/" + key + ".json"
 
 	record := struct {
@@ -2311,7 +2360,7 @@ func TestCache_HTTPCache_Match_Bad_BodyPathMismatch(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-match-body-path-mismatch/match-body-path-mismatch/responses/" + key + ".json"
 
 	record := struct {
@@ -2354,7 +2403,7 @@ func TestCache_HTTPCache_Match_RejectsTamperedMetadata(t *testing.T) {
 		URL:    "https://example.com/style.css",
 		Method: "GET",
 	}
-	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-match-tampered/match-tampered/responses/" + key + ".json"
 
 	record := struct {

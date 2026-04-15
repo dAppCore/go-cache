@@ -1213,10 +1213,11 @@ func (httpCache *HTTPCache) storagePath(parts ...string) string {
 }
 
 func (httpCache *HTTPCache) requestKey(req CachedRequest) (string, error) {
-	if err := validateCachedRequest(req); err != nil {
-		return "", core.E("cache.HTTPCache.requestKey", "invalid cached request", err)
-	}
-	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL)), nil
+	return requestStorageKey(req)
+}
+
+func legacyRequestKey(req CachedRequest) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
 }
 
 func decodeRequestKey(encoded string) (CachedRequest, error) {
@@ -1316,6 +1317,12 @@ func (httpCache *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
 	}
 
 	record, err := httpCache.readResponseRecord(key)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		record, err = httpCache.readResponseRecord(legacyRequestKey(req))
+	}
 	if err != nil || record == nil {
 		return nil, err
 	}
@@ -1419,23 +1426,36 @@ func validateCachedResponseRecord(key string, record *cachedResponseRecord) erro
 		return core.E("cache.HTTPCache.validateCachedResponseRecord", "invalid cached request", err)
 	}
 
-	req, err := decodeRequestKey(key)
+	expectedKey, err := requestStorageKey(record.Request)
 	if err != nil {
 		return err
 	}
-	if record.Request != req {
+	legacyKey := legacyRequestKey(record.Request)
+	if key != expectedKey && key != legacyKey {
 		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached request metadata does not match cache key", nil)
 	}
 
 	if err := validateCachedResponse(record.Response); err != nil {
 		return err
 	}
-	expectedBodyPath := core.JoinPath("responses", key+".bin")
-	if record.Response.BodyPath != expectedBodyPath {
+	expectedBodyPaths := []string{
+		core.JoinPath("responses", expectedKey+".bin"),
+		core.JoinPath("responses", legacyKey+".bin"),
+	}
+	if !slices.Contains(expectedBodyPaths, record.Response.BodyPath) {
 		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached response body path does not match cache key", nil)
 	}
 
 	return nil
+}
+
+func requestStorageKey(req CachedRequest) (string, error) {
+	if err := validateCachedRequest(req); err != nil {
+		return "", core.E("cache.HTTPCache.requestStorageKey", "invalid cached request", err)
+	}
+
+	sum := sha256.Sum256([]byte(req.Method + "\x00" + req.URL))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func validateCachedRequest(req CachedRequest) error {
@@ -1547,6 +1567,15 @@ func (httpCache *HTTPCache) Delete(req CachedRequest) error {
 	}
 	if err := httpCache.medium.Delete(httpCache.responseBinaryPath(key)); err != nil && !core.Is(err, fs.ErrNotExist) {
 		return core.E("cache.HTTPCache.Delete", "failed to delete cached response body", err)
+	}
+	legacyKey := legacyRequestKey(req)
+	if legacyKey != key {
+		if err := httpCache.medium.Delete(httpCache.responseMetaPath(legacyKey)); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return core.E("cache.HTTPCache.Delete", "failed to delete legacy cached response metadata", err)
+		}
+		if err := httpCache.medium.Delete(httpCache.responseBinaryPath(legacyKey)); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return core.E("cache.HTTPCache.Delete", "failed to delete legacy cached response body", err)
+		}
 	}
 
 	return nil
