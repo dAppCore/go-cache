@@ -521,10 +521,15 @@ func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
 }
 
 func (cache *Cache) clearScope(prefix string) error {
-	keys, err := cache.keysByPattern(prefix + "/*")
+	keys, err := cache.keysByPattern(prefix)
 	if err != nil {
 		return err
 	}
+	descendants, err := cache.keysByPattern(prefix + "/*")
+	if err != nil {
+		return err
+	}
+	keys = append(keys, descendants...)
 
 	for _, key := range keys {
 		if _, err := cache.removeEntryFiles(key); err != nil {
