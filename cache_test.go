@@ -274,6 +274,38 @@ func TestCache_DeleteMany_Good(t *testing.T) {
 	}
 }
 
+func TestCache_DeleteMany_RejectsTraversalBeforeDeletingAnything(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-delete-many-traversal", time.Minute)
+
+	if err := c.Set("key1", map[string]string{"foo": "bar"}); err != nil {
+		t.Fatalf("Set failed for key1: %v", err)
+	}
+	if err := c.Set("key2", map[string]string{"foo": "bar"}); err != nil {
+		t.Fatalf("Set failed for key2: %v", err)
+	}
+
+	if err := c.DeleteMany("key1", "../../etc/passwd", "key2"); err == nil {
+		t.Fatal("expected DeleteMany to reject traversal key")
+	}
+
+	var retrieved map[string]string
+	found, err := c.Get("key1", &retrieved)
+	if err != nil {
+		t.Fatalf("Get after rejected DeleteMany returned an unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected key1 to remain after rejected DeleteMany")
+	}
+
+	found, err = c.Get("key2", &retrieved)
+	if err != nil {
+		t.Fatalf("Get after rejected DeleteMany returned an unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected key2 to remain after rejected DeleteMany")
+	}
+}
+
 func TestCache_Clear_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-clear", time.Minute)
 	data := map[string]string{"foo": "bar"}

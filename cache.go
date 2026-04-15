@@ -391,6 +391,9 @@ func (c *Cache) DeleteMany(keys ...string) error {
 		if err := ensureSafeKey(key); err != nil {
 			return err
 		}
+	}
+
+	for _, key := range keys {
 		if _, err := c.removeEntryFiles(key); err != nil {
 			return err
 		}
@@ -858,11 +861,11 @@ func (cs *CacheStorage) Delete(name string) error {
 		return err
 	}
 
-	delete(cs.caches, name)
-
 	if err := cs.medium.DeleteAll(core.JoinPath(cs.baseDir, name)); err != nil && !core.Is(err, fs.ErrNotExist) {
 		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
 	}
+
+	delete(cs.caches, name)
 	return nil
 }
 
