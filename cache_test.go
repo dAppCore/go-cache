@@ -382,6 +382,31 @@ func TestCache_Binary_Good(t *testing.T) {
 	}
 }
 
+func TestCache_Binary_RoundTripArbitraryBytes(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary-arbitrary", 10*time.Minute)
+
+	blob := []byte{0x00, 0x7f, 0x80, 0xff, 0x1b}
+	if err := c.SetBinary("wasm/opaque", blob, "application/octet-stream"); err != nil {
+		t.Fatalf("SetBinary failed: %v", err)
+	}
+
+	data, found, err := c.GetBinary("wasm/opaque")
+	if err != nil {
+		t.Fatalf("GetBinary failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected binary data")
+	}
+	if len(data) != len(blob) {
+		t.Fatalf("unexpected payload length: got %d want %d", len(data), len(blob))
+	}
+	for i := range blob {
+		if data[i] != blob[i] {
+			t.Fatalf("unexpected byte at %d: got 0x%x want 0x%x", i, data[i], blob[i])
+		}
+	}
+}
+
 func TestCache_Binary_WithTTL_Expires(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary-expiry", 10*time.Minute)
 
@@ -621,6 +646,17 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	}
 	if len(names) != 0 {
 		t.Fatalf("expected cache name removed, got %v", strings.Join(names, ","))
+	}
+}
+
+func TestCache_HTTPCacheStorage_Close_Good(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-close")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
 }
 
