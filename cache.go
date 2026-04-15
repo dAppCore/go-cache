@@ -865,20 +865,27 @@ func (cs *CacheStorage) Keys() ([]string, error) {
 
 	entries, err := cs.medium.List(cs.baseDir)
 	if err != nil {
-		if core.Is(err, fs.ErrNotExist) {
-			return []string{}, nil
+		if !core.Is(err, fs.ErrNotExist) {
+			return nil, core.E("cache.CacheStorage.Keys", "failed to list caches", err)
 		}
-		return nil, core.E("cache.CacheStorage.Keys", "failed to list caches", err)
 	}
 
-	names := make([]string, 0, len(entries))
+	names := make(map[string]struct{}, len(cs.caches)+len(entries))
+	for name := range cs.caches {
+		names[name] = struct{}{}
+	}
 	for _, entry := range entries {
 		if entry.IsDir() {
-			names = append(names, entry.Name())
+			names[entry.Name()] = struct{}{}
 		}
 	}
-	slices.Sort(names)
-	return names, nil
+
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // Close releases storage resources for compatibility with long-lived workflows.

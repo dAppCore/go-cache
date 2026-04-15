@@ -516,11 +516,19 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 		t.Fatalf("expected response to be deleted")
 	}
 
+	names, err := storage.Keys()
+	if err != nil {
+		t.Fatalf("storage.Keys before delete failed: %v", err)
+	}
+	if len(names) != 1 || names[0] != "my-app-v1" {
+		t.Fatalf("expected cache name to be listed, got %v", strings.Join(names, ","))
+	}
+
 	if err := storage.Delete("my-app-v1"); err != nil {
 		t.Fatalf("storage.Delete failed: %v", err)
 	}
 
-	names, err := storage.Keys()
+	names, err = storage.Keys()
 	if err != nil {
 		t.Fatalf("storage.Keys failed: %v", err)
 	}
