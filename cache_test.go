@@ -161,6 +161,15 @@ func TestCache_New_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_New_Bad_EnsureDirFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	medium.ensureDirErr["/tmp/cache-new-backend-bad"] = errors.New("boom")
+
+	if _, err := cache.New(medium, "/tmp/cache-new-backend-bad", time.Minute); err == nil {
+		t.Fatal("expected New to surface backend failure")
+	}
+}
+
 func TestCache_NewCacheStorage_Good(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
@@ -388,6 +397,15 @@ func TestCache_NilReceiver_Good(t *testing.T) {
 	if err := c.Set("x", map[string]string{"foo": "bar"}); err == nil {
 		t.Fatal("expected Set to fail on nil receiver")
 	}
+	if err := c.SetWithTTL("x", map[string]string{"foo": "bar"}, time.Second); err == nil {
+		t.Fatal("expected SetWithTTL to fail on nil receiver")
+	}
+	if err := c.SetBinary("x", []byte("body"), "text/plain"); err == nil {
+		t.Fatal("expected SetBinary to fail on nil receiver")
+	}
+	if err := c.SetBinaryWithTTL("x", []byte("body"), "text/plain", time.Second); err == nil {
+		t.Fatal("expected SetBinaryWithTTL to fail on nil receiver")
+	}
 
 	if err := c.Delete("x"); err == nil {
 		t.Fatal("expected Delete to fail on nil receiver")
@@ -416,6 +434,15 @@ func TestCache_ZeroValue_Ugly(t *testing.T) {
 
 	if err := c.Set("x", map[string]string{"foo": "bar"}); err == nil {
 		t.Fatal("expected Set to fail on zero-value cache")
+	}
+	if err := c.SetWithTTL("x", map[string]string{"foo": "bar"}, time.Second); err == nil {
+		t.Fatal("expected SetWithTTL to fail on zero-value cache")
+	}
+	if err := c.SetBinary("x", []byte("body"), "text/plain"); err == nil {
+		t.Fatal("expected SetBinary to fail on zero-value cache")
+	}
+	if err := c.SetBinaryWithTTL("x", []byte("body"), "text/plain", time.Second); err == nil {
+		t.Fatal("expected SetBinaryWithTTL to fail on zero-value cache")
 	}
 
 	if err := c.Delete("x"); err == nil {
@@ -457,6 +484,25 @@ func TestCache_Delete_Bad(t *testing.T) {
 
 	if err := c.Delete("../../etc/passwd"); err == nil {
 		t.Fatal("expected Delete to reject traversal key")
+	}
+}
+
+func TestCache_Delete_Bad_BackendFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	c, err := cache.New(medium, "/tmp/cache-delete-backend-bad", time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	key := "delete/backend"
+	path, err := c.Path(key)
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	medium.deleteErr[path] = errors.New("boom")
+
+	if err := c.Delete(key); err == nil {
+		t.Fatal("expected Delete to surface backend failure")
 	}
 }
 
@@ -706,6 +752,36 @@ func TestCache_SetBinaryWithTTL_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_SetBinaryWithTTL_Good(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary-with-ttl", 10*time.Minute)
+
+	key := "wasm/ttl"
+	blob := []byte("temporary-binary")
+	if err := c.SetBinaryWithTTL(key, blob, "application/octet-stream", 20*time.Millisecond); err != nil {
+		t.Fatalf("SetBinaryWithTTL failed: %v", err)
+	}
+
+	data, found, err := c.GetBinary(key)
+	if err != nil {
+		t.Fatalf("GetBinary before expiry failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected binary entry before expiry")
+	}
+	if string(data) != string(blob) {
+		t.Fatalf("unexpected payload: %q", data)
+	}
+
+	time.Sleep(35 * time.Millisecond)
+	_, found, err = c.GetBinary(key)
+	if err != nil {
+		t.Fatalf("GetBinary after expiry failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected binary entry to expire")
+	}
+}
+
 func TestCache_SetBinary_Ugly(t *testing.T) {
 	medium := newScriptedMedium()
 	c, err := cache.New(medium, "/tmp/cache-binary-ugly", time.Minute)
@@ -726,6 +802,32 @@ func TestCache_SetBinary_Ugly(t *testing.T) {
 	}
 	if _, ok := medium.Files[binPath]; ok {
 		t.Fatal("expected binary payload to be cleaned up after metadata write failure")
+	}
+}
+
+func TestCache_SetBinary_Ugly_BinaryWriteFailure(t *testing.T) {
+	medium := newScriptedMedium()
+	c, err := cache.New(medium, "/tmp/cache-binary-write-failure", time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	key := "wasm/write-failure"
+	jsonPath, err := c.Path(key)
+	if err != nil {
+		t.Fatalf("Path failed: %v", err)
+	}
+	binPath := strings.TrimSuffix(jsonPath, ".json") + ".bin"
+	medium.writeErr[binPath] = errors.New("payload boom")
+
+	if err := c.SetBinary(key, []byte("body"), "application/wasm"); err == nil {
+		t.Fatal("expected SetBinary to surface binary write failure")
+	}
+	if _, ok := medium.Files[jsonPath]; ok {
+		t.Fatal("expected metadata to be rolled back after binary write failure")
+	}
+	if _, ok := medium.Files[binPath]; ok {
+		t.Fatal("expected binary payload write to fail without leaving a file behind")
 	}
 }
 
@@ -1711,6 +1813,7 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 		{name: "wrong-extension", resp: &cache.CachedResponse{BodyPath: "responses/secret.txt"}},
 		{name: "backslash", resp: &cache.CachedResponse{BodyPath: `responses\secret.bin`}},
 		{name: "null-byte", resp: &cache.CachedResponse{BodyPath: "responses/secret\x00.bin"}},
+		{name: "too-long", resp: &cache.CachedResponse{BodyPath: "responses/" + strings.Repeat("a", 4097) + ".bin"}},
 	}
 
 	for _, tt := range tests {
@@ -2031,6 +2134,10 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 		{
 			name: "status-text",
 			resp: cache.CachedResponse{Status: 200, StatusText: "OK\r\nInjected"},
+		},
+		{
+			name: "status-text-too-long",
+			resp: cache.CachedResponse{Status: 200, StatusText: strings.Repeat("O", 1025)},
 		},
 		{
 			name: "header-name-too-long",
