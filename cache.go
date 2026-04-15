@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"dappco.re/go/core"
@@ -819,7 +820,27 @@ func (scopedCache *ScopedCache) OnInvalidate(trigger string, fn InvalidateFunc) 
 	if scopedCache == nil || scopedCache.parent == nil {
 		return
 	}
-	scopedCache.parent.OnInvalidate(trigger, fn)
+	if fn == nil {
+		scopedCache.parent.OnInvalidate(trigger, nil)
+		return
+	}
+
+	prefix := scopedCache.prefix
+	scopedCache.parent.OnInvalidate(trigger, func(trigger string) []string {
+		patterns := fn(trigger)
+		if len(patterns) == 0 {
+			return nil
+		}
+
+		scopedPatterns := make([]string, 0, len(patterns))
+		for _, pattern := range patterns {
+			if pattern == "" {
+				continue
+			}
+			scopedPatterns = append(scopedPatterns, scopePattern(prefix, pattern))
+		}
+		return scopedPatterns
+	})
 }
 
 func (scopedCache *ScopedCache) Invalidate(trigger string) (int, error) {
@@ -836,15 +857,23 @@ func (scopedCache *ScopedCache) Age(key string) time.Duration {
 	return scopedCache.parent.Age(scopedCache.fullKey(key))
 }
 
+func scopePattern(prefix, pattern string) string {
+	pattern = strings.TrimPrefix(pattern, "/")
+	if pattern == "" {
+		return prefix
+	}
+	return prefix + "/" + pattern
+}
+
 // CacheStorage manages named caches for HTTP cache API emulation.
 //
 //	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
 //	appCache, err := storage.Open("my-app-v1")
 //	defer storage.Close()
 type CacheStorage struct {
-	medium      coreio.Medium
-	baseDir     string
-	caches      map[string]*HTTPCache
+	medium  coreio.Medium
+	baseDir string
+	caches  map[string]*HTTPCache
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
@@ -870,9 +899,9 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 	}
 
 	return &CacheStorage{
-		medium:      medium,
-		baseDir:     baseDir,
-		caches:      make(map[string]*HTTPCache),
+		medium:  medium,
+		baseDir: baseDir,
+		caches:  make(map[string]*HTTPCache),
 	}, nil
 }
 

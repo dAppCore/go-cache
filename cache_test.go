@@ -575,6 +575,51 @@ func TestCache_Scoped_ClearScope_Good(t *testing.T) {
 	}
 }
 
+func TestCache_Scoped_OnInvalidate_ScopesReturnedPatterns(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-scoped-invalidate", time.Minute)
+
+	app := c.Scoped("https://app.example.com")
+	admin := c.Scoped("https://admin.example.com")
+
+	if err := app.Set("config/theme", "app-dark"); err != nil {
+		t.Fatalf("app Set failed: %v", err)
+	}
+	if err := admin.Set("config/theme", "admin-dark"); err != nil {
+		t.Fatalf("admin Set failed: %v", err)
+	}
+
+	app.OnInvalidate("config.changed", func(trigger string) []string {
+		return []string{"config/*"}
+	})
+
+	deleted, err := app.Invalidate("config.changed")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected one scoped entry to be deleted, got %d", deleted)
+	}
+
+	var appVal string
+	var adminVal string
+
+	found, err := app.Get("config/theme", &appVal)
+	if err != nil {
+		t.Fatalf("app Get failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected app scoped config to be deleted")
+	}
+
+	found, err = admin.Get("config/theme", &adminVal)
+	if err != nil {
+		t.Fatalf("admin Get failed: %v", err)
+	}
+	if !found || adminVal != "admin-dark" {
+		t.Fatalf("expected admin scoped config to remain, found=%v val=%q", found, adminVal)
+	}
+}
+
 func TestCache_Invalidate_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate", time.Minute)
 
