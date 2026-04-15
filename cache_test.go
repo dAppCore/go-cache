@@ -417,6 +417,22 @@ func TestCache_Binary_WithTTL_ZeroExpiresImmediately(t *testing.T) {
 	}
 }
 
+func TestCache_PublicMethods_RejectTraversalKeys(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-traversal-coverage", time.Minute)
+
+	if err := c.SetWithTTL("../../etc/passwd", "value", time.Second); err == nil {
+		t.Fatal("expected SetWithTTL to reject traversal key")
+	}
+
+	if err := c.SetBinary("../../etc/passwd", []byte("blob"), "text/plain"); err == nil {
+		t.Fatal("expected SetBinary to reject traversal key")
+	}
+
+	if _, found, err := c.GetBinary("../../etc/passwd"); err == nil || found {
+		t.Fatalf("expected GetBinary to reject traversal key, found=%v err=%v", found, err)
+	}
+}
+
 func TestCache_Scoped_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped", time.Minute)
 
@@ -463,6 +479,9 @@ func TestCache_Invalidate_Good(t *testing.T) {
 	if err := c.Set("dns/example.com/A", map[string]string{"a": "1"}); err != nil {
 		t.Fatalf("Set dns entry failed: %v", err)
 	}
+	if err := c.Set("dns/example.com/sub/path", map[string]string{"a": "2"}); err != nil {
+		t.Fatalf("Set nested dns entry failed: %v", err)
+	}
 	if err := c.Set("config/theme", "dark"); err != nil {
 		t.Fatalf("Set config entry failed: %v", err)
 	}
@@ -486,10 +505,32 @@ func TestCache_Invalidate_Good(t *testing.T) {
 	if found {
 		t.Fatal("expected dns entry to be deleted")
 	}
+	found, err = c.Get("dns/example.com/sub/path", &dnsValue)
+	if err != nil {
+		t.Fatalf("Get nested dns entry after invalidation failed: %v", err)
+	}
+	if found {
+		t.Fatal("expected nested dns entry to be deleted")
+	}
 	var theme string
 	found, err = c.Get("config/theme", &theme)
 	if err != nil || !found {
 		t.Fatalf("expected config entry to remain, found=%v err=%v", found, err)
+	}
+}
+
+func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-traversal")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	if _, err := storage.Open("../evil"); err == nil {
+		t.Fatal("expected Open to reject traversal cache name")
+	}
+
+	if err := storage.Delete("../evil"); err == nil {
+		t.Fatal("expected Delete to reject traversal cache name")
 	}
 }
 
