@@ -161,6 +161,44 @@ func TestCache_New_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_NewCacheStorage_Good(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	t.Setenv("PWD", "")
+	t.Setenv("DIR_CWD", "")
+
+	storage, err := cache.NewCacheStorage(nil, "")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("assets-v1")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if httpCache == nil {
+		t.Fatal("expected Open to return a cache")
+	}
+
+	wantDir := core.JoinPath(tmpDir, ".core", "cache-storage", "assets-v1")
+	info, err := os.Stat(wantDir)
+	if err != nil {
+		t.Fatalf("expected default cache storage directory to exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected %q to be a directory", wantDir)
+	}
+}
+
+func TestCache_NewCacheStorage_Bad(t *testing.T) {
+	medium := newScriptedMedium()
+	medium.ensureDirErr["/tmp/cache-storage-bad"] = errors.New("boom")
+
+	if _, err := cache.NewCacheStorage(medium, "/tmp/cache-storage-bad"); err == nil {
+		t.Fatal("expected NewCacheStorage to surface backend failure")
+	}
+}
+
 func TestCache_SetWithTTL_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-setwithttl-bad", time.Minute)
 
@@ -194,9 +232,23 @@ func TestCache_Path_Good(t *testing.T) {
 func TestCache_Path_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-traversal", time.Minute)
 
-	_, err := c.Path("../../etc/passwd")
-	if err == nil {
-		t.Fatal("expected error for path traversal key, got nil")
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "empty", key: ""},
+		{name: "traversal", key: "../../etc/passwd"},
+		{name: "dot", key: "."},
+		{name: "backslash", key: `foo\bar`},
+		{name: "null-byte", key: "foo\x00bar"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := c.Path(tt.key); err == nil {
+				t.Fatalf("expected Path to reject %q", tt.key)
+			}
+		})
 	}
 }
 
@@ -628,6 +680,14 @@ func TestCache_SetBinary_Bad(t *testing.T) {
 
 	if err := c.SetBinaryWithTTL("../../etc/passwd", []byte("blob"), "text/plain", time.Second); err == nil {
 		t.Fatal("expected SetBinaryWithTTL to reject traversal key")
+	}
+}
+
+func TestCache_SetBinaryWithTTL_Bad(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-binary-negative-ttl", 10*time.Minute)
+
+	if err := c.SetBinaryWithTTL("wasm/negative-ttl", []byte("blob"), "application/wasm", -time.Second); err == nil {
+		t.Fatal("expected SetBinaryWithTTL to reject negative ttl")
 	}
 }
 
@@ -1156,12 +1216,45 @@ func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 		t.Fatalf("NewCacheStorage failed: %v", err)
 	}
 
-	if _, err := storage.Open("../evil"); err == nil {
-		t.Fatal("expected Open to reject traversal cache name")
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "open-empty",
+			fn: func() error {
+				_, err := storage.Open("")
+				return err
+			},
+		},
+		{
+			name: "open-dot",
+			fn: func() error {
+				_, err := storage.Open(".")
+				return err
+			},
+		},
+		{
+			name: "open-traversal",
+			fn: func() error {
+				_, err := storage.Open("../evil")
+				return err
+			},
+		},
+		{
+			name: "delete-backslash",
+			fn: func() error {
+				return storage.Delete(`bad\cache`)
+			},
+		},
 	}
 
-	if err := storage.Delete("../evil"); err == nil {
-		t.Fatal("expected Delete to reject traversal cache name")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.fn(); err == nil {
+				t.Fatalf("expected %s to be rejected", tt.name)
+			}
+		})
 	}
 }
 
@@ -1192,6 +1285,11 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	httpCache, err := storage.Open("my-app-v1")
 	if err != nil {
 		t.Fatalf("storage.Open failed: %v", err)
+	}
+	if again, err := storage.Open("my-app-v1"); err != nil {
+		t.Fatalf("storage.Open reuse failed: %v", err)
+	} else if again != httpCache {
+		t.Fatal("expected Open to reuse the existing cache instance")
 	}
 
 	req := cache.CachedRequest{
@@ -1308,6 +1406,24 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCacheStorage_Keys_Good_EmptyDir(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-empty-keys")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	medium.listErr["/tmp/cache-http-empty-keys"] = fs.ErrNotExist
+
+	names, err := storage.Keys()
+	if err != nil {
+		t.Fatalf("Keys should treat missing storage dir as empty: %v", err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected no cache names, got %v", names)
+	}
+}
+
 func TestCache_HTTPCacheStorage_Close_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-close")
 	if err != nil {
@@ -1396,6 +1512,29 @@ func TestCache_HTTPCacheDeleteMissing_Good(t *testing.T) {
 	}
 }
 
+func TestCache_HTTPCache_Keys_Good_EmptyResponseDir(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-keys-empty")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("keys-empty")
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+
+	medium.listErr["/tmp/cache-http-keys-empty/keys-empty/responses"] = fs.ErrNotExist
+
+	urls, err := httpCache.Keys()
+	if err != nil {
+		t.Fatalf("Keys should treat missing response dir as empty: %v", err)
+	}
+	if len(urls) != 0 {
+		t.Fatalf("expected no URLs, got %v", urls)
+	}
+}
+
 func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-body-safety")
 	if err != nil {
@@ -1413,8 +1552,12 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 	}{
 		{name: "nil", resp: nil},
 		{name: "empty", resp: &cache.CachedResponse{}},
+		{name: "absolute", resp: &cache.CachedResponse{BodyPath: "/responses/secret.bin"}},
 		{name: "traversal", resp: &cache.CachedResponse{BodyPath: "../../etc/passwd"}},
 		{name: "wrong-root", resp: &cache.CachedResponse{BodyPath: "config/secret.bin"}},
+		{name: "wrong-extension", resp: &cache.CachedResponse{BodyPath: "responses/secret.txt"}},
+		{name: "backslash", resp: &cache.CachedResponse{BodyPath: `responses\secret.bin`}},
+		{name: "null-byte", resp: &cache.CachedResponse{BodyPath: "responses/secret\x00.bin"}},
 	}
 
 	for _, tt := range tests {
@@ -1468,6 +1611,54 @@ func TestCache_HTTPCache_Put_Bad(t *testing.T) {
 
 	if err := httpCache.Put(cache.CachedRequest{}, cache.CachedResponse{}, []byte("body")); err == nil {
 		t.Fatal("expected Put to reject empty request key")
+	}
+}
+
+func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
+	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-put-request-bad")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("put-request-bad")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		req  cache.CachedRequest
+	}{
+		{
+			name: "invalid-method",
+			req: cache.CachedRequest{
+				URL:    "https://example.com/style.css",
+				Method: "G ET",
+			},
+		},
+		{
+			name: "url-control-bytes",
+			req: cache.CachedRequest{
+				URL:    "https://example.com/\r\nX-Injected: yes",
+				Method: "GET",
+			},
+		},
+		{
+			name: "method-control-bytes",
+			req: cache.CachedRequest{
+				URL:    "https://example.com/style.css",
+				Method: "GET\r\nX-Injected: yes",
+			},
+		},
+	}
+
+	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := httpCache.Put(tt.req, resp, []byte("body")); err == nil {
+				t.Fatalf("expected Put to reject %s request metadata", tt.name)
+			}
+		})
 	}
 }
 
@@ -1549,6 +1740,95 @@ func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
 	}
 	if _, ok := medium.Files[binPath]; ok {
 		t.Fatal("expected response body to be cleaned up after metadata write failure")
+	}
+}
+
+func TestCache_HTTPCache_Match_Bad_RequestMismatch(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-mismatch")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-mismatch")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-match-mismatch/match-mismatch/responses/" + key + ".json"
+
+	record := struct {
+		Request  cache.CachedRequest  `json:"request"`
+		Response cache.CachedResponse `json:"response"`
+	}{
+		Request: cache.CachedRequest{
+			URL:    "https://example.com/wrong.css",
+			Method: "GET",
+		},
+		Response: cache.CachedResponse{
+			Status:     200,
+			StatusText: "OK",
+			Headers:    map[string]string{"Content-Type": "text/css"},
+			BodyPath:   "responses/" + key + ".bin",
+		},
+	}
+
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	medium.Files[metaPath] = string(raw)
+
+	if matched, err := httpCache.Match(req); err == nil || matched != nil {
+		t.Fatalf("expected Match to reject mismatched request metadata, matched=%v err=%v", matched, err)
+	}
+}
+
+func TestCache_HTTPCache_Match_Bad_BodyPath(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-body-path")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-body-path")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-match-body-path/match-body-path/responses/" + key + ".json"
+
+	record := struct {
+		Request  cache.CachedRequest  `json:"request"`
+		Response cache.CachedResponse `json:"response"`
+	}{
+		Request: req,
+		Response: cache.CachedResponse{
+			Status:     200,
+			StatusText: "OK",
+			Headers:    map[string]string{"Content-Type": "text/css"},
+			BodyPath:   "config/secret.bin",
+		},
+	}
+
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	medium.Files[metaPath] = string(raw)
+
+	if matched, err := httpCache.Match(req); err == nil || matched != nil {
+		t.Fatalf("expected Match to reject invalid body path, matched=%v err=%v", matched, err)
 	}
 }
 
