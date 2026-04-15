@@ -1339,6 +1339,20 @@ func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name: "open-newline",
+			fn: func() error {
+				_, err := storage.Open("cache\nname")
+				return err
+			},
+		},
+		{
+			name: "open-null-byte",
+			fn: func() error {
+				_, err := storage.Open("cache\x00name")
+				return err
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2171,6 +2185,49 @@ func TestCache_HTTPCache_Match_Bad_BodyPath(t *testing.T) {
 
 	if matched, err := httpCache.Match(req); err == nil || matched != nil {
 		t.Fatalf("expected Match to reject invalid body path, matched=%v err=%v", matched, err)
+	}
+}
+
+func TestCache_HTTPCache_Match_Bad_BodyPathMismatch(t *testing.T) {
+	medium := newScriptedMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-body-path-mismatch")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("match-body-path-mismatch")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/style.css",
+		Method: "GET",
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	metaPath := "/tmp/cache-http-match-body-path-mismatch/match-body-path-mismatch/responses/" + key + ".json"
+
+	record := struct {
+		Request  cache.CachedRequest  `json:"request"`
+		Response cache.CachedResponse `json:"response"`
+	}{
+		Request: req,
+		Response: cache.CachedResponse{
+			Status:     200,
+			StatusText: "OK",
+			Headers:    map[string]string{"Content-Type": "text/css"},
+			BodyPath:   "responses/other.bin",
+		},
+	}
+
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	medium.Files[metaPath] = string(raw)
+
+	if matched, err := httpCache.Match(req); err == nil || matched != nil {
+		t.Fatalf("expected Match to reject mismatched body path, matched=%v err=%v", matched, err)
 	}
 }
 

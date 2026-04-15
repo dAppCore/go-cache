@@ -750,8 +750,8 @@ func ensureSafeKey(key string) error {
 	if core.Contains(key, "\\") {
 		return core.E("cache.validateKey", "invalid key: contains path separators", nil)
 	}
-	if core.Contains(key, "\x00") {
-		return core.E("cache.validateKey", "invalid key: contains null byte", nil)
+	if hasPathDangerousBytes(key) {
+		return core.E("cache.validateKey", "invalid key: contains control bytes", nil)
 	}
 
 	for _, part := range core.Split(key, "/") {
@@ -761,6 +761,15 @@ func ensureSafeKey(key string) error {
 	}
 
 	return nil
+}
+
+func hasPathDangerousBytes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureSafeResponseBodyPath(path string) error {
@@ -773,8 +782,8 @@ func ensureSafeResponseBodyPath(path string) error {
 	if core.PathIsAbs(path) {
 		return core.E("cache.validateResponseBodyPath", "invalid body path: absolute paths are not allowed", nil)
 	}
-	if core.Contains(path, "\\") || core.Contains(path, "\x00") {
-		return core.E("cache.validateResponseBodyPath", "invalid body path", nil)
+	if core.Contains(path, "\\") || hasPathDangerousBytes(path) {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: contains control bytes", nil)
 	}
 
 	normalized := normalizePath(path)
@@ -1064,6 +1073,9 @@ func ensureSafeCacheName(op, name string) error {
 	if core.Contains(name, "/") || core.Contains(name, `\`) {
 		return core.E(op, "invalid cache name", nil)
 	}
+	if hasPathDangerousBytes(name) {
+		return core.E(op, "invalid cache name", nil)
+	}
 	if name == "." || name == ".." {
 		return core.E(op, "invalid cache name", nil)
 	}
@@ -1201,8 +1213,8 @@ func (httpCache *HTTPCache) storagePath(parts ...string) string {
 }
 
 func (httpCache *HTTPCache) requestKey(req CachedRequest) (string, error) {
-	if core.Trim(req.URL) == "" || core.Trim(req.Method) == "" {
-		return "", core.E("cache.HTTPCache.requestKey", "request URL and method are required", nil)
+	if err := validateCachedRequest(req); err != nil {
+		return "", core.E("cache.HTTPCache.requestKey", "invalid cached request", err)
 	}
 	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL)), nil
 }
@@ -1418,6 +1430,10 @@ func validateCachedResponseRecord(key string, record *cachedResponseRecord) erro
 	if err := validateCachedResponse(record.Response); err != nil {
 		return err
 	}
+	expectedBodyPath := core.JoinPath("responses", key+".bin")
+	if record.Response.BodyPath != expectedBodyPath {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached response body path does not match cache key", nil)
+	}
 
 	return nil
 }
@@ -1486,8 +1502,7 @@ func validateHTTPHeaderName(name string) error {
 
 func hasHTTPDangerousBytes(s string) bool {
 	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\r', '\n', 0x00:
+		if s[i] < 0x20 || s[i] == 0x7f {
 			return true
 		}
 	}
