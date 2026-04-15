@@ -754,9 +754,6 @@ func scopePrefix(origin string) string {
 }
 
 func (scopedCache *ScopedCache) fullKey(key string) string {
-	if key == "" {
-		return scopedCache.prefix
-	}
 	return scopedCache.prefix + "/" + key
 }
 
