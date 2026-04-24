@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"dappco.re/go/cache"
-	coreio "dappco.re/go/core/io"
+	coreio "dappco.re/go/io"
 )
 
 func main() {

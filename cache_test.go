@@ -16,7 +16,7 @@ import (
 
 	"dappco.re/go/cache"
 	"dappco.re/go/core"
-	coreio "dappco.re/go/core/io"
+	coreio "dappco.re/go/io"
 )
 
 type scriptedMedium struct {
