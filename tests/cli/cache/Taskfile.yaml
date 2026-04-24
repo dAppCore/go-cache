@@ -1,0 +1,9 @@
+version: "3"
+
+tasks:
+  default:
+    dir: ../../..
+    cmds:
+      - go build -o /tmp/go-cache-cli-driver ./tests/cli/cache
+      - /tmp/go-cache-cli-driver
+      - rm -f /tmp/go-cache-cli-driver
