@@ -273,6 +273,40 @@ func TestCache_Path_Bad(t *testing.T) {
 	}
 }
 
+func TestCache_Path_PathTraversalSymlink_Bad(t *testing.T) {
+	tmpDir := t.TempDir()
+	baseDir := core.JoinPath(tmpDir, "cache")
+	outsideDir := core.JoinPath(tmpDir, "outside")
+	linkPath := core.JoinPath(baseDir, "link")
+
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll base failed: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll outside failed: %v", err)
+	}
+	if err := os.Symlink(outsideDir, linkPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	c, err := cache.New(coreio.Local, baseDir, time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if _, err := c.Path("link/escaped"); err == nil {
+		t.Fatal("expected Path to reject symlink traversal under baseDir")
+	}
+	if err := c.Set("link/escaped", "owned"); err == nil {
+		t.Fatal("expected Set to reject symlink traversal under baseDir")
+	}
+	if _, err := os.Stat(core.JoinPath(outsideDir, "escaped.json")); err == nil {
+		t.Fatal("expected escaped file not to be written outside baseDir")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("Stat outside file failed: %v", err)
+	}
+}
+
 func TestCache_Get_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache", time.Minute)
 
@@ -1116,6 +1150,35 @@ func TestCache_Invalidate_Good(t *testing.T) {
 	found, err = c.Get("config/theme", &theme)
 	if err != nil || !found {
 		t.Fatalf("expected config entry to remain, found=%v err=%v", found, err)
+	}
+}
+
+func TestCache_Invalidate_UntrustedPatternLength_Bad(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-invalidate-pattern-length", time.Minute)
+
+	if err := c.Set("dns/example.com/A", "record"); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	c.OnInvalidate("dns.changed", func(trigger string) []string {
+		return []string{strings.Repeat("a", 4097)}
+	})
+
+	deleted, err := c.Invalidate("dns.changed")
+	if err == nil {
+		t.Fatal("expected Invalidate to reject an oversized pattern")
+	}
+	if deleted != 0 {
+		t.Fatalf("expected no deletions after rejecting oversized pattern, got %d", deleted)
+	}
+
+	var record string
+	found, err := c.Get("dns/example.com/A", &record)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found || record != "record" {
+		t.Fatalf("expected entry to remain, found=%v record=%q", found, record)
 	}
 }
 

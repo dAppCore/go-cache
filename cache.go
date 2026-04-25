@@ -29,6 +29,7 @@ const DefaultTTL = 1 * time.Hour
 
 const (
 	maxCacheKeyBytes            = 4096
+	maxCachePatternBytes        = 4096
 	maxCacheNameBytes           = 255
 	maxCachedRequestURLBytes    = 8192
 	maxCachedRequestMethodBytes = 32
@@ -143,6 +144,9 @@ func (cache *Cache) Path(key string) (string, error) {
 
 	if path != baseDir && !core.HasPrefix(path, pathPrefix) {
 		return "", core.E("cache.Path", "invalid cache key: path traversal attempt", nil)
+	}
+	if err := ensureNoSymlinkPath(baseDir, path); err != nil {
+		return "", core.E("cache.Path", "invalid cache key: symlink escape attempt", err)
 	}
 
 	return path, nil
@@ -520,6 +524,10 @@ func (cache *Cache) collectJSONKeys(prefix string) ([]string, error) {
 }
 
 func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
+	if err := ensureSafePattern(pattern); err != nil {
+		return nil, err
+	}
+
 	allKeys, err := cache.listJSONKeys()
 	if err != nil {
 		return nil, err
@@ -760,6 +768,60 @@ func ensureSafeKey(key string) error {
 		}
 	}
 
+	return nil
+}
+
+func ensureSafePattern(pattern string) error {
+	if pattern == "" {
+		return core.E("cache.validatePattern", "invalid empty pattern", nil)
+	}
+	if len(pattern) > maxCachePatternBytes {
+		return core.E("cache.validatePattern", "invalid pattern: too long", nil)
+	}
+	if core.Contains(pattern, "\\") || hasPathDangerousBytes(pattern) {
+		return core.E("cache.validatePattern", "invalid pattern: contains control bytes", nil)
+	}
+	return nil
+}
+
+func ensureNoSymlinkPath(baseDir, path string) error {
+	if err := rejectSymlink(baseDir); err != nil {
+		return err
+	}
+
+	if path == baseDir {
+		return nil
+	}
+
+	rel := core.TrimPrefix(path, normalizePath(core.Concat(baseDir, pathSeparator())))
+	if rel == path {
+		return nil
+	}
+
+	current := baseDir
+	for _, part := range core.Split(rel, pathSeparator()) {
+		if part == "" {
+			continue
+		}
+		current = core.JoinPath(current, part)
+		if err := rejectSymlink(current); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return core.E("cache.validatePath", "path contains symlink", nil)
+	}
 	return nil
 }
 
