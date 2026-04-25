@@ -17,6 +17,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2681,6 +2682,143 @@ func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *test
 	}
 	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "../../escape"}); err == nil {
 		t.Fatal("expected ReadBody to reject traversal body path")
+	}
+}
+
+func TestCache_ThreatTOCTOU_InvalidateOnInvalidateRegistrationIsSnapshotRaceClean(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-invalidate-snapshot", time.Minute)
+
+	if err := c.Set("victim", "old"); err != nil {
+		t.Fatalf("Set victim failed: %v", err)
+	}
+	if err := c.Set("late", "new"); err != nil {
+		t.Fatalf("Set late failed: %v", err)
+	}
+
+	var registerOnce sync.Once
+	var lateCalls int64
+	c.OnInvalidate("reload", func(trigger string) []string {
+		registerOnce.Do(func() {
+			c.OnInvalidate(trigger, func(string) []string {
+				atomic.AddInt64(&lateCalls, 1)
+				return []string{"late"}
+			})
+		})
+		runtime.Gosched()
+		return []string{"victim"}
+	})
+
+	deleted, err := c.Invalidate("reload")
+	if err != nil {
+		t.Fatalf("Invalidate failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected first invalidation to delete snapshot callback match only, got %d", deleted)
+	}
+	if got := atomic.LoadInt64(&lateCalls); got != 0 {
+		t.Fatalf("newly registered callback should not run in same invalidation pass, got %d calls", got)
+	}
+
+	deleted, err = c.Invalidate("reload")
+	if err != nil {
+		t.Fatalf("second Invalidate failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected second invalidation to delete late callback match, got %d", deleted)
+	}
+	if got := atomic.LoadInt64(&lateCalls); got != 1 {
+		t.Fatalf("expected late callback to run once on next invalidation pass, got %d calls", got)
+	}
+}
+
+func TestCache_ThreatTOCTOU_InvalidateConcurrentRegistrationRaceClean(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-invalidate-race", time.Minute)
+	c.OnInvalidate("reload", func(string) []string {
+		runtime.Gosched()
+		return nil
+	})
+
+	const workers = 16
+	const registrationsPerWorker = 16
+	start := make(chan struct{})
+	errCh := make(chan error, workers)
+
+	var done sync.WaitGroup
+	done.Add(workers * 2)
+	for range workers {
+		go func() {
+			defer done.Done()
+			<-start
+			for range registrationsPerWorker {
+				c.OnInvalidate("reload", func(string) []string {
+					runtime.Gosched()
+					return nil
+				})
+			}
+		}()
+	}
+	for range workers {
+		go func() {
+			defer done.Done()
+			<-start
+			for range registrationsPerWorker {
+				if _, err := c.Invalidate("reload"); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+
+	close(start)
+	done.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("Invalidate failed: %v", err)
+	}
+}
+
+func TestCache_ThreatTOCTOU_ExpiredGetConcurrentReadersReturnNotFound(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-expired-get", time.Minute)
+	if err := c.SetWithTTL("ttl/race", map[string]string{"state": "expired"}, time.Nanosecond); err != nil {
+		t.Fatalf("SetWithTTL failed: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+
+	const readers = 64
+	start := make(chan struct{})
+	errCh := make(chan string, readers)
+
+	var done sync.WaitGroup
+	done.Add(readers)
+	for range readers {
+		go func() {
+			defer done.Done()
+			<-start
+
+			got := map[string]string{"state": "sentinel"}
+			found, err := c.Get("ttl/race", &got)
+			if err != nil {
+				errCh <- err.Error()
+				return
+			}
+			if found {
+				errCh <- "expected expired Get to return found=false"
+				return
+			}
+			if got["state"] != "sentinel" {
+				errCh <- "expired Get unmarshaled stale data into destination"
+			}
+		}()
+	}
+
+	close(start)
+	done.Wait()
+	close(errCh)
+
+	for msg := range errCh {
+		t.Error(msg)
 	}
 }
 
