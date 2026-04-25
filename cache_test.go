@@ -3,15 +3,19 @@
 package cache_test
 
 import (
+	// Note: AX-6 — test-only, replicates internal key derivation for black-box assertion. Retain.
 	"crypto/sha256"
+	// Note: AX-6 — test-only, replicates internal key derivation for black-box assertion. Retain.
 	"encoding/base64"
+	// Note: AX-6 — test-only, replicates internal key derivation for black-box assertion. Retain.
 	"encoding/hex"
+	// Note: AX-6 — test-only, replicates internal key derivation for black-box assertion. Retain.
 	"encoding/json"
-	"errors"
+	// Note: AX-6 — test-only fs interfaces returned by scriptedMedium and fs.ErrNotExist assertions.
 	"io/fs"
+	// Note: AX-6 — test-only symlink setup; no core equivalent for os.Symlink.
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,8 +129,27 @@ func legacyHTTPCacheStorageKey(req cache.CachedRequest) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
 }
 
+func repeatString(s string, count int) string {
+	builder := core.NewBuilder()
+	for range count {
+		builder.WriteString(s)
+	}
+	return builder.String()
+}
+
+func stableTempDir(t *testing.T) string {
+	t.Helper()
+
+	tmpRoot := core.JoinPath(core.Env("DIR_CWD"), ".core", "test-tmp")
+	if err := coreio.Local.EnsureDir(tmpRoot); err != nil {
+		t.Fatalf("EnsureDir temp root failed: %v", err)
+	}
+	t.Setenv("TMPDIR", tmpRoot)
+	return t.TempDir()
+}
+
 func TestCache_New_Good(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := stableTempDir(t)
 	t.Chdir(tmpDir)
 	t.Setenv("PWD", "")
 	t.Setenv("DIR_CWD", "")
@@ -143,11 +166,7 @@ func TestCache_New_Good(t *testing.T) {
 		t.Fatalf("Path failed: %v", err)
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd failed: %v", err)
-	}
-	wantPath := core.JoinPath(cwd, ".core", "cache", key+".json")
+	wantPath := core.JoinPath(tmpDir, ".core", "cache", key+".json")
 	if path != wantPath {
 		t.Fatalf("expected default path %q, got %q", wantPath, path)
 	}
@@ -156,7 +175,7 @@ func TestCache_New_Good(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if !strings.Contains(raw, "\n  \"data\":") {
+	if !core.Contains(raw, "\n  \"data\":") {
 		t.Fatalf("expected pretty-printed cache entry, got %q", raw)
 	}
 
@@ -176,7 +195,7 @@ func TestCache_New_Bad(t *testing.T) {
 
 func TestCache_New_Bad_EnsureDirFailure(t *testing.T) {
 	medium := newScriptedMedium()
-	medium.ensureDirErr["/tmp/cache-new-backend-bad"] = errors.New("boom")
+	medium.ensureDirErr["/tmp/cache-new-backend-bad"] = core.E("cache_test", "boom", nil)
 
 	if _, err := cache.New(medium, "/tmp/cache-new-backend-bad", time.Minute); err == nil {
 		t.Fatal("expected New to surface backend failure")
@@ -184,7 +203,7 @@ func TestCache_New_Bad_EnsureDirFailure(t *testing.T) {
 }
 
 func TestCache_NewCacheStorage_Good(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := stableTempDir(t)
 	t.Chdir(tmpDir)
 	t.Setenv("PWD", "")
 	t.Setenv("DIR_CWD", "")
@@ -203,7 +222,7 @@ func TestCache_NewCacheStorage_Good(t *testing.T) {
 	}
 
 	wantDir := core.JoinPath(tmpDir, ".core", "cache-storage", "assets-v1")
-	info, err := os.Stat(wantDir)
+	info, err := coreio.Local.Stat(wantDir)
 	if err != nil {
 		t.Fatalf("expected default cache storage directory to exist: %v", err)
 	}
@@ -214,7 +233,7 @@ func TestCache_NewCacheStorage_Good(t *testing.T) {
 
 func TestCache_NewCacheStorage_Bad(t *testing.T) {
 	medium := newScriptedMedium()
-	medium.ensureDirErr["/tmp/cache-storage-bad"] = errors.New("boom")
+	medium.ensureDirErr["/tmp/cache-storage-bad"] = core.E("cache_test", "boom", nil)
 
 	if _, err := cache.NewCacheStorage(medium, "/tmp/cache-storage-bad"); err == nil {
 		t.Fatal("expected NewCacheStorage to surface backend failure")
@@ -263,7 +282,7 @@ func TestCache_Path_Bad(t *testing.T) {
 		{name: "dot", key: "."},
 		{name: "backslash", key: `foo\bar`},
 		{name: "null-byte", key: "foo\x00bar"},
-		{name: "too-long", key: strings.Repeat("a", 4097)},
+		{name: "too-long", key: repeatString("a", 4097)},
 	}
 
 	for _, tt := range tests {
@@ -281,11 +300,11 @@ func TestCache_Path_PathTraversalSymlink_Bad(t *testing.T) {
 	outsideDir := core.JoinPath(tmpDir, "outside")
 	linkPath := core.JoinPath(baseDir, "link")
 
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll base failed: %v", err)
+	if err := coreio.Local.EnsureDir(baseDir); err != nil {
+		t.Fatalf("EnsureDir base failed: %v", err)
 	}
-	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll outside failed: %v", err)
+	if err := coreio.Local.EnsureDir(outsideDir); err != nil {
+		t.Fatalf("EnsureDir outside failed: %v", err)
 	}
 	if err := os.Symlink(outsideDir, linkPath); err != nil {
 		t.Skipf("symlink not supported: %v", err)
@@ -302,9 +321,9 @@ func TestCache_Path_PathTraversalSymlink_Bad(t *testing.T) {
 	if err := c.Set("link/escaped", "owned"); err == nil {
 		t.Fatal("expected Set to reject symlink traversal under baseDir")
 	}
-	if _, err := os.Stat(core.JoinPath(outsideDir, "escaped.json")); err == nil {
+	if _, err := coreio.Local.Stat(core.JoinPath(outsideDir, "escaped.json")); err == nil {
 		t.Fatal("expected escaped file not to be written outside baseDir")
-	} else if !os.IsNotExist(err) {
+	} else if !core.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Stat outside file failed: %v", err)
 	}
 }
@@ -546,7 +565,7 @@ func TestCache_Delete_Bad_BackendFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path failed: %v", err)
 	}
-	medium.deleteErr[path] = errors.New("boom")
+	medium.deleteErr[path] = core.E("cache_test", "boom", nil)
 
 	if err := c.Delete(key); err == nil {
 		t.Fatal("expected Delete to surface backend failure")
@@ -656,7 +675,7 @@ func TestCache_Clear_Bad(t *testing.T) {
 		t.Fatalf("New failed: %v", err)
 	}
 
-	medium.deleteAllErr["/tmp/cache-clear-bad"] = errors.New("boom")
+	medium.deleteAllErr["/tmp/cache-clear-bad"] = core.E("cache_test", "boom", nil)
 
 	if err := c.Clear(); err == nil {
 		t.Fatal("expected Clear to surface backend failure")
@@ -670,7 +689,7 @@ func TestCache_ClearScope_Bad_ListFailure(t *testing.T) {
 		t.Fatalf("New failed: %v", err)
 	}
 
-	medium.listErr["/tmp/cache-clear-scope-bad"] = errors.New("boom")
+	medium.listErr["/tmp/cache-clear-scope-bad"] = core.E("cache_test", "boom", nil)
 
 	if err := c.ClearScope("https://app.example.com"); err == nil {
 		t.Fatal("expected ClearScope to surface backend list failure")
@@ -841,8 +860,8 @@ func TestCache_SetBinary_Ugly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path failed: %v", err)
 	}
-	binPath := strings.TrimSuffix(jsonPath, ".json") + ".bin"
-	medium.writeErr[jsonPath] = errors.New("metadata boom")
+	binPath := core.TrimSuffix(jsonPath, ".json") + ".bin"
+	medium.writeErr[jsonPath] = core.E("cache_test", "metadata boom", nil)
 
 	if err := c.SetBinary(key, []byte("body"), "application/wasm"); err == nil {
 		t.Fatal("expected SetBinary to surface metadata write failure")
@@ -864,8 +883,8 @@ func TestCache_SetBinary_Ugly_BinaryWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path failed: %v", err)
 	}
-	binPath := strings.TrimSuffix(jsonPath, ".json") + ".bin"
-	medium.writeErr[binPath] = errors.New("payload boom")
+	binPath := core.TrimSuffix(jsonPath, ".json") + ".bin"
+	medium.writeErr[binPath] = core.E("cache_test", "payload boom", nil)
 
 	if err := c.SetBinary(key, []byte("body"), "application/wasm"); err == nil {
 		t.Fatal("expected SetBinary to surface binary write failure")
@@ -969,7 +988,7 @@ func TestCache_GetBinary_Bad_MissingPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path failed: %v", err)
 	}
-	binPath := strings.TrimSuffix(jsonPath, ".json") + ".bin"
+	binPath := core.TrimSuffix(jsonPath, ".json") + ".bin"
 	delete(m.Files, binPath)
 
 	if data, found, err := c.GetBinary(key); err != nil || found || data != nil {
@@ -1163,7 +1182,7 @@ func TestCache_Invalidate_UntrustedPatternLength_Bad(t *testing.T) {
 	}
 
 	c.OnInvalidate("dns.changed", func(trigger string) []string {
-		return []string{strings.Repeat("a", 4097)}
+		return []string{repeatString("a", 4097)}
 	})
 
 	deleted, err := c.Invalidate("dns.changed")
@@ -1348,7 +1367,7 @@ func TestCache_Scoped_Wrappers_Good(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scoped Path failed: %v", err)
 	}
-	if !strings.Contains(path, "scope_") {
+	if !core.Contains(path, "scope_") {
 		t.Fatalf("expected scoped path, got %q", path)
 	}
 
@@ -1513,7 +1532,7 @@ func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 		{
 			name: "open-too-long",
 			fn: func() error {
-				_, err := storage.Open(strings.Repeat("a", 256))
+				_, err := storage.Open(repeatString("a", 256))
 				return err
 			},
 		},
@@ -1598,7 +1617,7 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	}
 	var metaPath string
 	for _, entry := range metaEntries {
-		if strings.HasSuffix(entry.Name(), ".json") {
+		if core.HasSuffix(entry.Name(), ".json") {
 			metaPath = "/tmp/cache-http/my-app-v1/responses/" + entry.Name()
 			break
 		}
@@ -1670,7 +1689,7 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 		t.Fatalf("storage.Keys before delete failed: %v", err)
 	}
 	if len(names) != 1 || names[0] != "my-app-v1" {
-		t.Fatalf("expected cache name to be listed, got %v", strings.Join(names, ","))
+		t.Fatalf("expected cache name to be listed, got %v", core.Join(",", names...))
 	}
 
 	if err := storage.Delete("my-app-v1"); err != nil {
@@ -1686,7 +1705,7 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 		t.Fatalf("storage.Keys failed: %v", err)
 	}
 	if len(names) != 0 {
-		t.Fatalf("expected cache name removed, got %v", strings.Join(names, ","))
+		t.Fatalf("expected cache name removed, got %v", core.Join(",", names...))
 	}
 }
 
@@ -1703,7 +1722,7 @@ func TestCache_HTTPCacheStorage_Good_LongURLUsesFixedWidthStorageKey(t *testing.
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/" + strings.Repeat("a", 4000),
+		URL:    "https://example.com/" + repeatString("a", 4000),
 		Method: "GET",
 	}
 	if err := httpCache.Put(req, cache.CachedResponse{Status: 200, StatusText: "OK"}, []byte("body")); err != nil {
@@ -1753,7 +1772,7 @@ func TestCache_HTTPCacheStorage_Keys_Bad_ListFailure(t *testing.T) {
 		t.Fatalf("NewCacheStorage failed: %v", err)
 	}
 
-	medium.listErr["/tmp/cache-http-keys-bad"] = errors.New("boom")
+	medium.listErr["/tmp/cache-http-keys-bad"] = core.E("cache_test", "boom", nil)
 
 	if _, err := storage.Keys(); err == nil {
 		t.Fatal("expected Keys to surface backend list failure")
@@ -1767,7 +1786,7 @@ func TestCache_HTTPCacheStorage_Delete_Bad_BackendFailure(t *testing.T) {
 		t.Fatalf("NewCacheStorage failed: %v", err)
 	}
 
-	medium.deleteAllErr["/tmp/cache-http-delete-storage-bad/blocked"] = errors.New("boom")
+	medium.deleteAllErr["/tmp/cache-http-delete-storage-bad/blocked"] = core.E("cache_test", "boom", nil)
 
 	if err := storage.Delete("blocked"); err == nil {
 		t.Fatal("expected Delete to surface backend failure")
@@ -1837,7 +1856,7 @@ func TestCache_HTTPCacheStorage_DottedName_Good(t *testing.T) {
 		t.Fatalf("storage.Keys failed: %v", err)
 	}
 	if len(names) != 1 || names[0] != "api.v2-cache" {
-		t.Fatalf("expected dotted cache name to be listed, got %v", strings.Join(names, ","))
+		t.Fatalf("expected dotted cache name to be listed, got %v", core.Join(",", names...))
 	}
 }
 
@@ -1897,7 +1916,7 @@ func TestCache_HTTPCache_Keys_Bad_ListFailure(t *testing.T) {
 		t.Fatalf("storage.Open failed: %v", err)
 	}
 
-	medium.listErr["/tmp/cache-http-keys-list-bad/keys-list-bad/responses"] = errors.New("boom")
+	medium.listErr["/tmp/cache-http-keys-list-bad/keys-list-bad/responses"] = core.E("cache_test", "boom", nil)
 
 	if _, err := httpCache.Keys(); err == nil {
 		t.Fatal("expected Keys to surface backend list failure")
@@ -1927,7 +1946,7 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 		{name: "wrong-extension", resp: &cache.CachedResponse{BodyPath: "responses/secret.txt"}},
 		{name: "backslash", resp: &cache.CachedResponse{BodyPath: `responses\secret.bin`}},
 		{name: "null-byte", resp: &cache.CachedResponse{BodyPath: "responses/secret\x00.bin"}},
-		{name: "too-long", resp: &cache.CachedResponse{BodyPath: "responses/" + strings.Repeat("a", 4097) + ".bin"}},
+		{name: "too-long", resp: &cache.CachedResponse{BodyPath: "responses/" + repeatString("a", 4097) + ".bin"}},
 	}
 
 	for _, tt := range tests {
@@ -2017,7 +2036,7 @@ func TestCache_HTTPCache_Delete_Bad_BackendFailure(t *testing.T) {
 	}
 	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-delete-bad/delete-bad/responses/" + key + ".json"
-	medium.deleteErr[metaPath] = errors.New("boom")
+	medium.deleteErr[metaPath] = core.E("cache_test", "boom", nil)
 
 	if err := httpCache.Delete(req); err == nil {
 		t.Fatal("expected Delete to surface backend failure")
@@ -2174,7 +2193,7 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 		{
 			name: "url-too-long",
 			req: cache.CachedRequest{
-				URL:    "https://example.com/" + strings.Repeat("a", 8193),
+				URL:    "https://example.com/" + repeatString("a", 8193),
 				Method: "GET",
 			},
 		},
@@ -2182,7 +2201,7 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 			name: "method-too-long",
 			req: cache.CachedRequest{
 				URL:    "https://example.com/style.css",
-				Method: strings.Repeat("G", 33),
+				Method: repeatString("G", 33),
 			},
 		},
 	}
@@ -2251,14 +2270,14 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 		},
 		{
 			name: "status-text-too-long",
-			resp: cache.CachedResponse{Status: 200, StatusText: strings.Repeat("O", 1025)},
+			resp: cache.CachedResponse{Status: 200, StatusText: repeatString("O", 1025)},
 		},
 		{
 			name: "header-name-too-long",
 			resp: cache.CachedResponse{
 				Status:     200,
 				StatusText: "OK",
-				Headers:    map[string]string{strings.Repeat("X", 257): "value"},
+				Headers:    map[string]string{repeatString("X", 257): "value"},
 			},
 		},
 		{
@@ -2266,7 +2285,7 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 			resp: cache.CachedResponse{
 				Status:     200,
 				StatusText: "OK",
-				Headers:    map[string]string{"Content-Type": strings.Repeat("a", 8193)},
+				Headers:    map[string]string{"Content-Type": repeatString("a", 8193)},
 			},
 		},
 		{
@@ -2310,7 +2329,7 @@ func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
 	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".json"
 	binPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".bin"
-	medium.writeErr[metaPath] = errors.New("metadata boom")
+	medium.writeErr[metaPath] = core.E("cache_test", "metadata boom", nil)
 
 	if err := httpCache.Put(req, cache.CachedResponse{}, []byte("body")); err == nil {
 		t.Fatal("expected Put to surface metadata write failure")
@@ -2551,7 +2570,7 @@ func TestCache_HTTPCache_Match_Bad(t *testing.T) {
 
 func TestCache_ThreatUntrustedKeyDoS_RejectsOversizedKeysOnWritePaths(t *testing.T) {
 	c, medium := newTestCache(t, "/tmp/cache-threat-untrusted-key", time.Minute)
-	key := strings.Repeat("a", 4097)
+	key := repeatString("a", 4097)
 
 	tests := []struct {
 		name string
@@ -2610,7 +2629,7 @@ func TestCache_ThreatPathTraversal_ScopedOriginIsHashedAndKeysStillValidated(t *
 	if err != nil {
 		t.Fatalf("scoped Path failed: %v", err)
 	}
-	if strings.Contains(path, "evil") || strings.Contains(path, "..") || strings.Contains(path, "\n") {
+	if core.Contains(path, "evil") || core.Contains(path, "..") || core.Contains(path, "\n") {
 		t.Fatalf("expected scoped path to omit raw origin, got %q", path)
 	}
 
@@ -2648,7 +2667,7 @@ func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *test
 		t.Fatal("expected HTTP body to be stored under hashed request key")
 	}
 	for path := range medium.Files {
-		if strings.Contains(path, "..") || strings.Contains(path, "secret.css") {
+		if core.Contains(path, "..") || core.Contains(path, "secret.css") {
 			t.Fatalf("expected stored path to omit raw request URL, got %q", path)
 		}
 	}
