@@ -2822,6 +2822,154 @@ func TestCache_ThreatTOCTOU_ExpiredGetConcurrentReadersReturnNotFound(t *testing
 	}
 }
 
+func TestCache_ThreatTOCTOU_ConcurrentSetRandomKeysRaceClean(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-concurrent-random-set", time.Minute)
+
+	const workers = 100
+	keys := make([]string, workers)
+	for i := range workers {
+		keys[i] = "race/random/" + core.Itoa((i*37+11)%workers)
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan string, workers)
+
+	var done sync.WaitGroup
+	done.Add(workers)
+	for i, key := range keys {
+		go func(value int, key string) {
+			defer done.Done()
+			<-start
+			if err := c.Set(key, map[string]int{"writer": value}); err != nil {
+				errCh <- err.Error()
+			}
+		}(i, key)
+	}
+
+	close(start)
+	done.Wait()
+	close(errCh)
+
+	for msg := range errCh {
+		t.Error(msg)
+	}
+
+	foundCount := 0
+	for i, key := range keys {
+		var got map[string]int
+		found, err := c.Get(key, &got)
+		if err != nil {
+			t.Fatalf("Get %q failed: %v", key, err)
+		}
+		if !found {
+			continue
+		}
+		foundCount++
+		if got["writer"] != i {
+			t.Fatalf("expected %q writer %d, got %d", key, i, got["writer"])
+		}
+	}
+	if foundCount != workers {
+		t.Fatalf("expected %d entries after concurrent Set calls, got %d", workers, foundCount)
+	}
+}
+
+func TestCache_ThreatTOCTOU_ConcurrentSetSameKeyRaceClean(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-concurrent-same-set", time.Minute)
+
+	const workers = 100
+	written := make(map[int]struct{}, workers)
+	for i := range workers {
+		written[i] = struct{}{}
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan string, workers)
+
+	var done sync.WaitGroup
+	done.Add(workers)
+	for i := range workers {
+		go func(value int) {
+			defer done.Done()
+			<-start
+			if err := c.Set("race/same", map[string]int{"writer": value}); err != nil {
+				errCh <- err.Error()
+			}
+		}(i)
+	}
+
+	close(start)
+	done.Wait()
+	close(errCh)
+
+	for msg := range errCh {
+		t.Error(msg)
+	}
+
+	var got map[string]int
+	found, err := c.Get("race/same", &got)
+	if err != nil {
+		t.Fatalf("final Get failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected final cache entry to exist")
+	}
+	if _, ok := written[got["writer"]]; !ok {
+		t.Fatalf("final writer %d was not one of the concurrent writers", got["writer"])
+	}
+}
+
+func TestCache_ThreatTOCTOU_ConcurrentGetSetDeleteSameKeyRaceClean(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-concurrent-mixed", time.Minute)
+	if err := c.Set("race/mixed", map[string]int{"writer": -1}); err != nil {
+		t.Fatalf("initial Set failed: %v", err)
+	}
+
+	const workers = 100
+	const operations = 10
+	start := make(chan struct{})
+	errCh := make(chan string, workers*operations)
+
+	var done sync.WaitGroup
+	done.Add(workers)
+	for i := range workers {
+		go func(value int) {
+			defer done.Done()
+			<-start
+			for op := range operations {
+				switch (value + op) % 3 {
+				case 0:
+					var got map[string]int
+					found, err := c.Get("race/mixed", &got)
+					if err != nil {
+						errCh <- err.Error()
+						continue
+					}
+					if found && (got["writer"] < -1 || got["writer"] >= workers) {
+						errCh <- "Get returned a writer outside the written range"
+					}
+				case 1:
+					if err := c.Set("race/mixed", map[string]int{"writer": value}); err != nil {
+						errCh <- err.Error()
+					}
+				default:
+					if err := c.Delete("race/mixed"); err != nil {
+						errCh <- err.Error()
+					}
+				}
+			}
+		}(i)
+	}
+
+	close(start)
+	done.Wait()
+	close(errCh)
+
+	for msg := range errCh {
+		t.Error(msg)
+	}
+}
+
 func TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites(t *testing.T) {
 	medium := &raceProbeMedium{MockMedium: coreio.NewMockMedium()}
 	c, err := cache.New(medium, "/tmp/cache-threat-toctou", time.Minute)
