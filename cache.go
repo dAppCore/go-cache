@@ -10,11 +10,9 @@ import (
 	"encoding/base64"
 	// Note: AX-6 — no core equivalent for hex encoding.
 	"encoding/hex"
-	// Note: AX-6 — no core equivalent for fs.ErrNotExist or fs interfaces returned by Medium.List.
+	// Note: AX-6 — structural: coreio.Medium surfaces fs.ErrNotExist/fs.DirEntry, and Lstat symlink checks use fs.ModeSymlink.
 	"io/fs"
-	// Note: AX-6 — no core equivalent for URL path escaping.
-	"net/url"
-	// Note: AX-6 — no core equivalent for Lstat symlink checks or dynamic working directory lookup.
+	// Note: AX-6 — intrinsic: coreio.Medium has no no-follow Lstat primitive or dynamic cwd lookup.
 	"os"
 	"slices"
 	// Note: AX-6 — core.RWMutex is not available in the pinned core module.
@@ -958,12 +956,12 @@ func ensureNoSymlinkPath(baseDir, path string) error {
 func rejectSymlink(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if core.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
+	if info.Mode()&fs.ModeSymlink != 0 {
 		return core.E("cache.validatePath", "path contains symlink", nil)
 	}
 	return nil
@@ -1922,7 +1920,7 @@ func GitHubRepoKey(org, repo string) string {
 }
 
 func encodePathSegment(segment string) string {
-	return url.PathEscape(segment)
+	return core.URLPathEscape(segment)
 }
 
 func pathSeparator() string {
