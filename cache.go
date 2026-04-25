@@ -4,19 +4,11 @@
 package cache
 
 import (
-	// Note: AX-6 — no core equivalent for SHA-256 hashing.
-	"crypto/sha256"
-	// Note: AX-6 — no core equivalent for URL-safe base64 encoding.
-	"encoding/base64"
-	// Note: AX-6 — no core equivalent for hex encoding.
-	"encoding/hex"
 	// Note: AX-6 — structural: coreio.Medium surfaces fs.ErrNotExist/fs.DirEntry, and Lstat symlink checks use fs.ModeSymlink.
 	"io/fs"
 	// Note: AX-6 — intrinsic: coreio.Medium has no no-follow Lstat primitive or dynamic cwd lookup.
 	"os"
 	"slices"
-	// Note: AX-6 — core.RWMutex is not available in the pinned core module.
-	"sync"
 	// Note: AX-6 — no core equivalent for durations or wall-clock timestamps.
 	"time"
 
@@ -51,8 +43,9 @@ type Cache struct {
 	baseDir      string
 	cacheTTL     time.Duration
 	invalidation map[string][]InvalidateFunc
-	mu           sync.RWMutex
-	entryMu      sync.RWMutex
+	runtime      *core.Core
+	// Backing-store operations intentionally have no mutex; callers must
+	// synchronize concurrent writes to the same key.
 }
 
 // Entry is the serialized cache record written to the backing Medium.
@@ -90,7 +83,7 @@ func marshalPrettyJSON(value any) (string, error) {
 	if !result.OK {
 		return "", result.Value.(error)
 	}
-	return indentJSON(result.Value.([]byte)), nil
+	return indentJSON([]byte(core.JSONMarshalString(value))), nil
 }
 
 func indentJSON(data []byte) string {
@@ -243,6 +236,7 @@ func New(medium coreio.Medium, baseDir string, cacheTTL time.Duration) (*Cache, 
 		baseDir:      baseDir,
 		cacheTTL:     cacheTTL,
 		invalidation: make(map[string][]InvalidateFunc),
+		runtime:      core.New(),
 	}, nil
 }
 
@@ -294,9 +288,6 @@ func (cache *Cache) Get(key string, dest any) (bool, error) {
 	if err := cache.ensureReady("cache.Get"); err != nil {
 		return false, err
 	}
-
-	cache.entryMu.RLock()
-	defer cache.entryMu.RUnlock()
 
 	path, err := cache.Path(key)
 	if err != nil {
@@ -354,9 +345,6 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 	if err := cache.ensureReady("cache.set"); err != nil {
 		return err
 	}
-
-	cache.entryMu.Lock()
-	defer cache.entryMu.Unlock()
 
 	path, _, err := cache.entryPaths(key)
 	if err != nil {
@@ -423,8 +411,6 @@ func (cache *Cache) removeEntryFiles(key string) (bool, error) {
 	if err := cache.ensureReady("cache.removeEntryFiles"); err != nil {
 		return false, err
 	}
-	cache.entryMu.Lock()
-	defer cache.entryMu.Unlock()
 
 	jsonPath, binaryPath, err := cache.entryPaths(key)
 	if err != nil {
@@ -477,8 +463,6 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 	if err := cache.ensureReady("cache.setBinary"); err != nil {
 		return err
 	}
-	cache.entryMu.Lock()
-	defer cache.entryMu.Unlock()
 
 	jsonPath, binaryPath, err := cache.entryPaths(key)
 	if err != nil {
@@ -540,8 +524,6 @@ func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
 	if err := cache.ensureReady("cache.GetBinary"); err != nil {
 		return nil, false, err
 	}
-	cache.entryMu.RLock()
-	defer cache.entryMu.RUnlock()
 
 	metaPath, binaryPath, err := cache.entryPaths(key)
 	if err != nil {
@@ -585,9 +567,6 @@ func (cache *Cache) DeleteMany(keys ...string) error {
 	if err := cache.ensureReady("cache.DeleteMany"); err != nil {
 		return err
 	}
-
-	cache.entryMu.Lock()
-	defer cache.entryMu.Unlock()
 
 	type entryFileSet struct {
 		jsonPath   string
@@ -666,9 +645,6 @@ func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
 	if err := ensureSafePattern(pattern); err != nil {
 		return nil, err
 	}
-
-	cache.entryMu.RLock()
-	defer cache.entryMu.RUnlock()
 
 	allKeys, err := cache.listJSONKeys()
 	if err != nil {
@@ -813,8 +789,12 @@ func (cache *Cache) OnInvalidate(trigger string, fn InvalidateFunc) {
 	if fn == nil {
 		return
 	}
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	lock := cache.runtime.Lock("cache")
+	lock.Mutex.Lock()
+	defer lock.Mutex.Unlock()
+	if cache.invalidation == nil {
+		cache.invalidation = make(map[string][]InvalidateFunc)
+	}
 	cache.invalidation[trigger] = append(cache.invalidation[trigger], fn)
 }
 
@@ -826,9 +806,10 @@ func (cache *Cache) Invalidate(trigger string) (int, error) {
 		return 0, err
 	}
 
-	cache.mu.RLock()
+	lock := cache.runtime.Lock("cache")
+	lock.Mutex.RLock()
 	callbacks := append([]InvalidateFunc(nil), cache.invalidation[trigger]...)
-	cache.mu.RUnlock()
+	lock.Mutex.RUnlock()
 	total := 0
 	for _, callback := range callbacks {
 		for _, pattern := range callback(trigger) {
@@ -1016,9 +997,7 @@ type ScopedCache struct {
 }
 
 func scopePrefix(origin string) string {
-	sum := sha256.Sum256([]byte(origin))
-	hash := hex.EncodeToString(sum[:])
-	return "scope_" + hash
+	return "scope_" + core.SHA256Hex([]byte(origin))
 }
 
 func (scopedCache *ScopedCache) fullKey(key string) string {
@@ -1180,7 +1159,7 @@ type CacheStorage struct {
 	medium  coreio.Medium
 	baseDir string
 	caches  map[string]*HTTPCache
-	mu      sync.RWMutex
+	runtime *core.Core
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
@@ -1209,6 +1188,7 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 		medium:  medium,
 		baseDir: baseDir,
 		caches:  make(map[string]*HTTPCache),
+		runtime: core.New(),
 	}, nil
 }
 
@@ -1224,8 +1204,9 @@ func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
 		return nil, err
 	}
 
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
+	lock := storage.runtime.Lock("cache-storage")
+	lock.Mutex.Lock()
+	defer lock.Mutex.Unlock()
 	if httpCache, ok := storage.caches[name]; ok {
 		return httpCache, nil
 	}
@@ -1256,8 +1237,9 @@ func (storage *CacheStorage) Delete(name string) error {
 		return err
 	}
 
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
+	lock := storage.runtime.Lock("cache-storage")
+	lock.Mutex.Lock()
+	defer lock.Mutex.Unlock()
 	if err := storage.medium.DeleteAll(core.JoinPath(storage.baseDir, name)); err != nil && !core.Is(err, fs.ErrNotExist) {
 		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
 	}
@@ -1295,12 +1277,13 @@ func (storage *CacheStorage) Keys() ([]string, error) {
 		return nil, err
 	}
 
-	storage.mu.RLock()
+	lock := storage.runtime.Lock("cache-storage")
+	lock.Mutex.RLock()
 	names := make(map[string]struct{}, len(storage.caches))
 	for name := range storage.caches {
 		names[name] = struct{}{}
 	}
-	storage.mu.RUnlock()
+	lock.Mutex.RUnlock()
 
 	entries, err := storage.medium.List(storage.baseDir)
 	if err != nil {
@@ -1331,9 +1314,14 @@ func (storage *CacheStorage) Close() error {
 	if storage == nil {
 		return nil
 	}
-	storage.mu.Lock()
+	if storage.runtime == nil {
+		storage.caches = make(map[string]*HTTPCache)
+		return nil
+	}
+	lock := storage.runtime.Lock("cache-storage")
+	lock.Mutex.Lock()
+	defer lock.Mutex.Unlock()
 	storage.caches = make(map[string]*HTTPCache)
-	storage.mu.Unlock()
 	return nil
 }
 
@@ -1358,11 +1346,15 @@ func (storage *CacheStorage) ensureReady(op string) error {
 	if storage.baseDir == "" {
 		return core.E(op, "cache storage base directory is empty; construct via cache.NewCacheStorage", nil)
 	}
-	storage.mu.Lock()
+	if storage.runtime == nil {
+		return core.E(op, "cache storage runtime is nil; construct via cache.NewCacheStorage", nil)
+	}
+	lock := storage.runtime.Lock("cache-storage")
+	lock.Mutex.Lock()
+	defer lock.Mutex.Unlock()
 	if storage.caches == nil {
 		storage.caches = make(map[string]*HTTPCache)
 	}
-	storage.mu.Unlock()
 	return nil
 }
 
@@ -1421,11 +1413,99 @@ func (httpCache *HTTPCache) requestKey(req CachedRequest) (string, error) {
 }
 
 func legacyRequestKey(req CachedRequest) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
+	return rawBase64URLEncode([]byte(req.Method + "\x00" + req.URL))
+}
+
+func rawBase64URLEncode(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	builder := core.NewBuilder()
+
+	i := 0
+	for ; i+3 <= len(data); i += 3 {
+		n := uint(data[i])<<16 | uint(data[i+1])<<8 | uint(data[i+2])
+		builder.WriteByte(alphabet[(n>>18)&0x3f])
+		builder.WriteByte(alphabet[(n>>12)&0x3f])
+		builder.WriteByte(alphabet[(n>>6)&0x3f])
+		builder.WriteByte(alphabet[n&0x3f])
+	}
+
+	switch len(data) - i {
+	case 1:
+		n := uint(data[i]) << 16
+		builder.WriteByte(alphabet[(n>>18)&0x3f])
+		builder.WriteByte(alphabet[(n>>12)&0x3f])
+	case 2:
+		n := uint(data[i])<<16 | uint(data[i+1])<<8
+		builder.WriteByte(alphabet[(n>>18)&0x3f])
+		builder.WriteByte(alphabet[(n>>12)&0x3f])
+		builder.WriteByte(alphabet[(n>>6)&0x3f])
+	}
+
+	return builder.String()
+}
+
+func rawBase64URLDecode(encoded string) ([]byte, error) {
+	if core.Contains(encoded, "=") {
+		return nil, core.E("cache.rawBase64URLDecode", "raw URL base64 must not contain padding", nil)
+	}
+	if len(encoded)%4 == 1 {
+		return nil, core.E("cache.rawBase64URLDecode", "invalid raw URL base64 length", nil)
+	}
+
+	out := make([]byte, 0, len(encoded)*3/4)
+	for i := 0; i < len(encoded); {
+		remaining := len(encoded) - i
+		chunkLen := 4
+		if remaining < chunkLen {
+			chunkLen = remaining
+		}
+
+		var values [4]byte
+		for j := 0; j < chunkLen; j++ {
+			value := rawBase64URLDecodeValue(encoded[i+j])
+			if value < 0 {
+				return nil, core.E("cache.rawBase64URLDecode", "invalid raw URL base64 character", nil)
+			}
+			values[j] = byte(value)
+		}
+
+		out = append(out, values[0]<<2|values[1]>>4)
+		if chunkLen >= 3 {
+			out = append(out, values[1]<<4|values[2]>>2)
+		}
+		if chunkLen == 4 {
+			out = append(out, values[2]<<6|values[3])
+		}
+
+		i += chunkLen
+	}
+
+	return out, nil
+}
+
+func rawBase64URLDecodeValue(c byte) int {
+	switch {
+	case c >= 'A' && c <= 'Z':
+		return int(c - 'A')
+	case c >= 'a' && c <= 'z':
+		return int(c-'a') + 26
+	case c >= '0' && c <= '9':
+		return int(c-'0') + 52
+	case c == '-':
+		return 62
+	case c == '_':
+		return 63
+	default:
+		return -1
+	}
 }
 
 func decodeRequestKey(encoded string) (CachedRequest, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	raw, err := rawBase64URLDecode(encoded)
 	if err != nil {
 		return CachedRequest{}, core.E("cache.decodeRequestKey", "invalid cached request key", err)
 	}
@@ -1658,8 +1738,7 @@ func requestStorageKey(req CachedRequest) (string, error) {
 		return "", core.E("cache.HTTPCache.requestStorageKey", "invalid cached request", err)
 	}
 
-	sum := sha256.Sum256([]byte(req.Method + "\x00" + req.URL))
-	return hex.EncodeToString(sum[:]), nil
+	return core.SHA256Hex([]byte(req.Method + "\x00" + req.URL)), nil
 }
 
 func validateCachedRequest(req CachedRequest) error {
@@ -1975,6 +2054,9 @@ func (c *Cache) ensureConfigured(op string) error {
 	}
 	if c.baseDir == "" {
 		return core.E(op, "cache base directory is empty; construct with cache.New", nil)
+	}
+	if c.runtime == nil {
+		return core.E(op, "cache runtime is nil; construct with cache.New", nil)
 	}
 
 	return nil
