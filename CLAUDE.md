@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`go-cache` is a storage-agnostic, JSON-based caching library for Go. Module path: `dappco.re/go/core/cache`. The entire package is two files: `cache.go` and `cache_test.go`.
+`go-cache` is a storage-agnostic, JSON-based caching library for Go. Module path: `dappco.re/go/cache`. The entire package is two files: `cache.go` and `cache_test.go`.
 
 ## Commands
 

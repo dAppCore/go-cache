@@ -4,16 +4,20 @@
 package cache
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io/fs"
+	"net/url"
+	"os"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"dappco.re/go/core"
-	coreio "dappco.re/go/core/io"
-	"dappco.re/go/core/store"
+	coreio "dappco.re/go/io"
 )
 
 // DefaultTTL is the default cache expiry time.
@@ -23,19 +27,40 @@ import (
 //	c, err := cache.New(coreio.NewMockMedium(), "/tmp/cache", cache.DefaultTTL)
 const DefaultTTL = 1 * time.Hour
 
+const (
+	maxCacheKeyBytes            = 4096
+	maxCachePatternBytes        = 4096
+	maxCacheNameBytes           = 255
+	maxCachedRequestURLBytes    = 8192
+	maxCachedRequestMethodBytes = 32
+	maxCachedStatusTextBytes    = 1024
+	maxCachedHeaderNameBytes    = 256
+	maxCachedHeaderValueBytes   = 8192
+	maxCachedHeaderCount        = 128
+)
+
 // Cache stores JSON-encoded entries in a Medium-backed cache rooted at baseDir.
+//
+//	c, err := cache.New(coreio.Local, "/tmp/cache", 5*time.Minute)
 type Cache struct {
 	medium       coreio.Medium
 	baseDir      string
-	ttl          time.Duration
+	cacheTTL     time.Duration
 	invalidation map[string][]InvalidateFunc
+	mu           sync.RWMutex
 }
 
 // Entry is the serialized cache record written to the backing Medium.
+//
+//	entry := cache.Entry{
+//		Data:      []byte(`{"foo":"bar"}`),
+//		CachedAt:  time.Now(),
+//		ExpiresAt: time.Now().Add(time.Hour),
+//	}
 type Entry struct {
-	Data      store.RawMessage `json:"data"`
-	CachedAt  time.Time        `json:"cached_at"`
-	ExpiresAt time.Time        `json:"expires_at"`
+	Data      json.RawMessage `json:"data"`
+	CachedAt  time.Time       `json:"cached_at"`
+	ExpiresAt time.Time       `json:"expires_at"`
 }
 
 // BinaryMeta is the metadata for binary cache payloads.
@@ -55,14 +80,16 @@ type BinaryMeta struct {
 
 // InvalidateFunc returns glob patterns to delete when a registered trigger fires.
 //
-//	fn := func(trigger string) []string { return []string{"dns/*"} }
+//	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
+//		return []string{"dns/*"}
+//	})
 type InvalidateFunc func(trigger string) []string
 
-// New creates a cache and applies default Medium, base directory, and TTL values
-// when callers pass zero values.
+// New creates a cache with explicit storage, root directory, and TTL.
 //
-//	c, err := cache.New(coreio.Local, "/tmp/cache", time.Hour)
-func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error) {
+//	c, err := cache.New(coreio.Local, "/tmp/cache", 5*time.Minute)
+//	c, err = cache.New(nil, "", 0) // uses Local, .core/cache, and DefaultTTL
+func New(medium coreio.Medium, baseDir string, cacheTTL time.Duration) (*Cache, error) {
 	if medium == nil {
 		medium = coreio.Local
 	}
@@ -78,12 +105,12 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 		baseDir = absolutePath(baseDir)
 	}
 
-	if ttl < 0 {
+	if cacheTTL < 0 {
 		return nil, core.E("cache.New", "ttl must be >= 0", nil)
 	}
 
-	if ttl == 0 {
-		ttl = DefaultTTL
+	if cacheTTL == 0 {
+		cacheTTL = DefaultTTL
 	}
 
 	if err := medium.EnsureDir(baseDir); err != nil {
@@ -93,17 +120,17 @@ func New(medium coreio.Medium, baseDir string, ttl time.Duration) (*Cache, error
 	return &Cache{
 		medium:       medium,
 		baseDir:      baseDir,
-		ttl:          ttl,
+		cacheTTL:     cacheTTL,
 		invalidation: make(map[string][]InvalidateFunc),
 	}, nil
 }
 
-// Path returns the storage path used for key and rejects path traversal
-// attempts.
+// Path resolves the on-disk JSON path for a cache key.
 //
 //	path, err := c.Path("github/acme/repos")
-func (c *Cache) Path(key string) (string, error) {
-	if err := c.ensureConfigured("cache.Path"); err != nil {
+//	// => /tmp/cache/github/acme/repos.json
+func (cache *Cache) Path(key string) (string, error) {
+	if err := cache.ensureConfigured("cache.Path"); err != nil {
 		return "", err
 	}
 
@@ -111,31 +138,48 @@ func (c *Cache) Path(key string) (string, error) {
 		return "", err
 	}
 
-	baseDir := absolutePath(c.baseDir)
+	baseDir := absolutePath(cache.baseDir)
 	path := absolutePath(core.JoinPath(baseDir, key+".json"))
 	pathPrefix := normalizePath(core.Concat(baseDir, pathSeparator()))
 
 	if path != baseDir && !core.HasPrefix(path, pathPrefix) {
 		return "", core.E("cache.Path", "invalid cache key: path traversal attempt", nil)
 	}
+	if err := ensureNoSymlinkPath(baseDir, path); err != nil {
+		return "", core.E("cache.Path", "invalid cache key: symlink escape attempt", err)
+	}
 
 	return path, nil
+}
+
+// entryPaths resolves the JSON and binary file paths for a cache key.
+//
+//	jsonPath, binPath, err := c.entryPaths("github/acme/repos")
+func (cache *Cache) entryPaths(key string) (string, string, error) {
+	jsonPath, err := cache.Path(key)
+	if err != nil {
+		return "", "", err
+	}
+
+	baseDir := absolutePath(cache.baseDir)
+	binaryPath := absolutePath(core.JoinPath(baseDir, key+".bin"))
+	return jsonPath, binaryPath, nil
 }
 
 // Get unmarshals the cached item into dest if it exists and has not expired.
 //
 //	found, err := c.Get("github/acme/repos", &repos)
-func (c *Cache) Get(key string, dest any) (bool, error) {
-	if err := c.ensureReady("cache.Get"); err != nil {
+func (cache *Cache) Get(key string, dest any) (bool, error) {
+	if err := cache.ensureReady("cache.Get"); err != nil {
 		return false, err
 	}
 
-	path, err := c.Path(key)
+	path, err := cache.Path(key)
 	if err != nil {
 		return false, err
 	}
 
-	dataStr, err := c.medium.Read(path)
+	dataStr, err := cache.medium.Read(path)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return false, nil
@@ -146,7 +190,7 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 	var entry Entry
 	entryResult := core.JSONUnmarshalString(dataStr, &entry)
 	if !entryResult.OK {
-		return false, nil
+		return false, core.E("cache.Get", "failed to unmarshal cache entry", entryResult.Value.(error))
 	}
 
 	if time.Now().After(entry.ExpiresAt) {
@@ -160,37 +204,44 @@ func (c *Cache) Get(key string, dest any) (bool, error) {
 	return true, nil
 }
 
-// Set marshals data and stores it in the cache.
+// Set stores a value using the cache's default TTL.
 //
 //	err := c.Set("github/acme/repos", repos)
-func (c *Cache) Set(key string, data any) error {
-	if err := c.ensureReady("cache.Set"); err != nil {
+//	err = c.Set("config/theme", "dark")
+func (cache *Cache) Set(key string, data any) error {
+	if err := cache.ensureReady("cache.Set"); err != nil {
 		return err
 	}
-	return c.set(key, data, c.defaultTTL())
+	return cache.set(key, data, cache.defaultTTL(), true)
 }
 
-// SetWithTTL stores a value using a key-specific TTL.
+// SetWithTTL stores a value with an explicit TTL override.
 //
 //	err := c.SetWithTTL("dns/example.com/A", records, 5*time.Minute)
-func (c *Cache) SetWithTTL(key string, data any, ttl time.Duration) error {
-	if err := c.ensureReady("cache.SetWithTTL"); err != nil {
+//	err = c.SetWithTTL("session/token", token, 30*time.Second)
+func (cache *Cache) SetWithTTL(key string, data any, ttl time.Duration) error {
+	if err := cache.ensureReady("cache.SetWithTTL"); err != nil {
 		return err
 	}
-	return c.set(key, data, ttl)
+	return cache.set(key, data, ttl, false)
 }
 
-func (c *Cache) set(key string, data any, ttl time.Duration) error {
-	if err := c.ensureReady("cache.set"); err != nil {
+func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL bool) error {
+	if err := cache.ensureReady("cache.set"); err != nil {
 		return err
 	}
 
-	path, err := c.Path(key)
+	path, _, err := cache.entryPaths(key)
 	if err != nil {
 		return err
 	}
 
-	if err := c.medium.EnsureDir(core.PathDir(path)); err != nil {
+	snapshot, err := readFileSnapshot(cache.medium, path)
+	if err != nil {
+		return core.E("cache.set", "failed to inspect existing cache entry", err)
+	}
+
+	if err := cache.medium.EnsureDir(core.PathDir(path)); err != nil {
 		return core.E("cache.Set", "failed to create directory", err)
 	}
 
@@ -202,8 +253,8 @@ func (c *Cache) set(key string, data any, ttl time.Duration) error {
 	if ttl < 0 {
 		return core.E("cache.set", "cache ttl must be >= 0", nil)
 	}
-	if ttl == 0 {
-		ttl = c.defaultTTL()
+	if ttl == 0 && useDefaultTTL {
+		ttl = cache.defaultTTL()
 	}
 
 	now := time.Now()
@@ -213,46 +264,45 @@ func (c *Cache) set(key string, data any, ttl time.Duration) error {
 		ExpiresAt: now.Add(ttl),
 	}
 
-	entryBytes, err := store.MarshalIndent(entry, "", "  ")
+	entryBytes, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return core.E("cache.Set", "failed to marshal cache entry", err)
 	}
 
-	if err := c.medium.Write(path, string(entryBytes)); err != nil {
+	if err := cache.medium.Write(path, string(entryBytes)); err != nil {
+		_ = restoreFileSnapshot(cache.medium, snapshot)
 		return core.E("cache.set", "failed to write cache file", err)
 	}
 	return nil
 }
 
-// Delete removes the cached item for key.
+// Delete removes one cached entry.
 //
 //	err := c.Delete("github/acme/repos")
-func (c *Cache) Delete(key string) error {
-	if err := c.ensureReady("cache.Delete"); err != nil {
+func (cache *Cache) Delete(key string) error {
+	if err := cache.ensureReady("cache.Delete"); err != nil {
 		return err
 	}
 
-	_, err := c.removeEntryFiles(key)
+	_, err := cache.removeEntryFiles(key)
 	if core.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	return err
 }
 
-// Delete removes cache entry files, including binary payload for the same key.
-func (c *Cache) removeEntryFiles(key string) (bool, error) {
-	if err := c.ensureReady("cache.removeEntryFiles"); err != nil {
+// removeEntryFiles deletes both the JSON metadata and sidecar binary payload for a key.
+func (cache *Cache) removeEntryFiles(key string) (bool, error) {
+	if err := cache.ensureReady("cache.removeEntryFiles"); err != nil {
 		return false, err
 	}
-	if err := ensureSafeKey(key); err != nil {
+	jsonPath, binaryPath, err := cache.entryPaths(key)
+	if err != nil {
 		return false, err
 	}
-
-	jsonPath := absolutePath(core.JoinPath(c.baseDir, key+".json"))
-	binaryPath := absolutePath(core.JoinPath(c.baseDir, key+".bin"))
 
 	removed := false
-	if err := c.medium.Delete(jsonPath); err != nil {
+	if err := cache.medium.Delete(jsonPath); err != nil {
 		if !core.Is(err, fs.ErrNotExist) {
 			return removed, core.E("cache.removeEntryFiles", "failed to delete cache json file", err)
 		}
@@ -260,10 +310,12 @@ func (c *Cache) removeEntryFiles(key string) (bool, error) {
 		removed = true
 	}
 
-	if err := c.medium.Delete(binaryPath); err != nil {
+	if err := cache.medium.Delete(binaryPath); err != nil {
 		if !core.Is(err, fs.ErrNotExist) {
 			return removed, core.E("cache.removeEntryFiles", "failed to delete cache binary file", err)
 		}
+	} else {
+		removed = true
 	}
 
 	return removed, nil
@@ -271,41 +323,52 @@ func (c *Cache) removeEntryFiles(key string) (bool, error) {
 
 // SetBinary stores raw bytes in a sidecar `.bin` file and metadata in JSON.
 //
-//	err := c.SetBinary("wasm/module", bytes, "application/wasm")
-func (c *Cache) SetBinary(key string, data []byte, contentType string) error {
-	if err := c.ensureReady("cache.SetBinary"); err != nil {
+//	err := c.SetBinary("wasm/my-module", wasmBytes, "application/wasm")
+//	err = c.SetBinary("artifacts/logo", pngBytes, "image/png")
+func (cache *Cache) SetBinary(key string, data []byte, contentType string) error {
+	if err := cache.ensureReady("cache.SetBinary"); err != nil {
 		return err
 	}
-	return c.setBinary(key, data, contentType, c.defaultTTL())
+	return cache.setBinary(key, data, contentType, cache.defaultTTL(), true)
 }
 
-// SetBinaryWithTTL stores raw bytes with a key-specific TTL.
-func (c *Cache) SetBinaryWithTTL(key string, data []byte, contentType string, ttl time.Duration) error {
-	if err := c.ensureReady("cache.SetBinaryWithTTL"); err != nil {
+// SetBinaryWithTTL stores raw bytes with an explicit TTL override.
+//
+//	err := c.SetBinaryWithTTL("responses/temp", body, "text/html", 10*time.Minute)
+//	err = c.SetBinaryWithTTL("dns/example.com/AAAA", raw, "application/octet-stream", 15*time.Second)
+func (cache *Cache) SetBinaryWithTTL(key string, data []byte, contentType string, ttl time.Duration) error {
+	if err := cache.ensureReady("cache.SetBinaryWithTTL"); err != nil {
 		return err
 	}
-	return c.setBinary(key, data, contentType, ttl)
+	return cache.setBinary(key, data, contentType, ttl, false)
 }
 
-func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.Duration) error {
-	if err := c.ensureReady("cache.setBinary"); err != nil {
+func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl time.Duration, useDefaultTTL bool) error {
+	if err := cache.ensureReady("cache.setBinary"); err != nil {
 		return err
 	}
-	if err := ensureSafeKey(key); err != nil {
+	jsonPath, binaryPath, err := cache.entryPaths(key)
+	if err != nil {
 		return err
+	}
+
+	jsonSnapshot, err := readFileSnapshot(cache.medium, jsonPath)
+	if err != nil {
+		return core.E("cache.setBinary", "failed to inspect existing binary metadata", err)
+	}
+	binarySnapshot, err := readFileSnapshot(cache.medium, binaryPath)
+	if err != nil {
+		return core.E("cache.setBinary", "failed to inspect existing binary payload", err)
 	}
 
 	if ttl < 0 {
 		return core.E("cache.setBinary", "cache ttl must be >= 0", nil)
 	}
-	if ttl == 0 {
-		ttl = c.defaultTTL()
+	if ttl == 0 && useDefaultTTL {
+		ttl = cache.defaultTTL()
 	}
 
-	jsonPath := absolutePath(core.JoinPath(c.baseDir, key+".json"))
-	binPath := absolutePath(core.JoinPath(c.baseDir, key+".bin"))
-
-	if err := c.medium.EnsureDir(core.PathDir(jsonPath)); err != nil {
+	if err := cache.medium.EnsureDir(core.PathDir(jsonPath)); err != nil {
 		return core.E("cache.setBinary", "failed to create directory", err)
 	}
 
@@ -317,17 +380,21 @@ func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.
 		ExpiresAt:   now.Add(ttl),
 	}
 
-	metaBytes, err := store.MarshalIndent(meta, "", "  ")
+	metaBytes, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return core.E("cache.setBinary", "failed to marshal binary metadata", err)
 	}
 
-	if err := c.medium.Write(jsonPath, string(metaBytes)); err != nil {
-		return core.E("cache.setBinary", "failed to write binary metadata", err)
+	if err := cache.medium.Write(binaryPath, string(data)); err != nil {
+		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
+		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
+		return core.E("cache.setBinary", "failed to write binary payload", err)
 	}
 
-	if err := c.medium.Write(binPath, string(data)); err != nil {
-		return core.E("cache.setBinary", "failed to write binary payload", err)
+	if err := cache.medium.Write(jsonPath, string(metaBytes)); err != nil {
+		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
+		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
+		return core.E("cache.setBinary", "failed to write binary metadata", err)
 	}
 
 	return nil
@@ -335,17 +402,17 @@ func (c *Cache) setBinary(key string, data []byte, contentType string, ttl time.
 
 // GetBinary returns raw binary cache payload.
 //
-//	data, found, err := c.GetBinary("wasm/module")
-func (c *Cache) GetBinary(key string) ([]byte, bool, error) {
-	if err := c.ensureReady("cache.GetBinary"); err != nil {
+//	data, found, err := c.GetBinary("wasm/my-module")
+func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
+	if err := cache.ensureReady("cache.GetBinary"); err != nil {
 		return nil, false, err
 	}
-	if err := ensureSafeKey(key); err != nil {
+	metaPath, binaryPath, err := cache.entryPaths(key)
+	if err != nil {
 		return nil, false, err
 	}
 
-	metaPath := absolutePath(core.JoinPath(c.baseDir, key+".json"))
-	rawMeta, err := c.medium.Read(metaPath)
+	rawMeta, err := cache.medium.Read(metaPath)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
@@ -363,8 +430,7 @@ func (c *Cache) GetBinary(key string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	bodyPath := absolutePath(core.JoinPath(c.baseDir, key+".bin"))
-	body, err := c.medium.Read(bodyPath)
+	body, err := cache.medium.Read(binaryPath)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return nil, false, nil
@@ -378,16 +444,31 @@ func (c *Cache) GetBinary(key string) ([]byte, bool, error) {
 // DeleteMany removes several entries in one call. Missing keys are ignored.
 //
 //	err := c.DeleteMany("github/acme/repos", "github/acme/meta")
-func (c *Cache) DeleteMany(keys ...string) error {
-	if err := c.ensureReady("cache.DeleteMany"); err != nil {
+//	err = c.DeleteMany("dns/example.com/A", "dns/example.com/AAAA")
+func (cache *Cache) DeleteMany(keys ...string) error {
+	if err := cache.ensureReady("cache.DeleteMany"); err != nil {
 		return err
 	}
 
+	type entryFileSet struct {
+		jsonPath   string
+		binaryPath string
+	}
+
+	resolved := make([]entryFileSet, 0, len(keys))
 	for _, key := range keys {
-		if err := ensureSafeKey(key); err != nil {
+		jsonPath, binaryPath, err := cache.entryPaths(key)
+		if err != nil {
 			return err
 		}
-		if _, err := c.removeEntryFiles(key); err != nil {
+		resolved = append(resolved, entryFileSet{jsonPath: jsonPath, binaryPath: binaryPath})
+	}
+
+	for _, paths := range resolved {
+		if err := cache.medium.Delete(paths.jsonPath); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := cache.medium.Delete(paths.binaryPath); err != nil && !core.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -395,16 +476,22 @@ func (c *Cache) DeleteMany(keys ...string) error {
 	return nil
 }
 
-func (c *Cache) listJSONKeys() ([]string, error) {
-	return c.collectJSONKeys("")
+func (cache *Cache) listJSONKeys() ([]string, error) {
+	keys, err := cache.collectJSONKeys("")
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(keys)
+	return keys, nil
 }
 
-func (c *Cache) collectJSONKeys(prefix string) ([]string, error) {
-	listPath := c.baseDir
+func (cache *Cache) collectJSONKeys(prefix string) ([]string, error) {
+	listPath := cache.baseDir
 	if prefix != "" {
-		listPath = core.JoinPath(c.baseDir, prefix)
+		listPath = core.JoinPath(cache.baseDir, prefix)
 	}
-	entries, err := c.medium.List(listPath)
+
+	entries, err := cache.medium.List(listPath)
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -412,32 +499,36 @@ func (c *Cache) collectJSONKeys(prefix string) ([]string, error) {
 		return nil, core.E("cache.collectJSONKeys", "failed to list cache directory", err)
 	}
 
-	var out []string
+	var keys []string
 	for _, entry := range entries {
 		name := entry.Name()
-		childRel := name
+		childPrefix := name
 		if prefix != "" {
-			childRel = core.JoinPath(prefix, name)
+			childPrefix = core.JoinPath(prefix, name)
 		}
 
 		if entry.IsDir() {
-			child, err := c.collectJSONKeys(childRel)
+			childKeys, err := cache.collectJSONKeys(childPrefix)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, child...)
+			keys = append(keys, childKeys...)
 			continue
 		}
 
 		if core.HasSuffix(name, ".json") {
-			out = append(out, core.TrimSuffix(childRel, ".json"))
+			keys = append(keys, core.TrimSuffix(childPrefix, ".json"))
 		}
 	}
-	return out, nil
+	return keys, nil
 }
 
-func (c *Cache) keysByPattern(pattern string) ([]string, error) {
-	allKeys, err := c.listJSONKeys()
+func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
+	if err := ensureSafePattern(pattern); err != nil {
+		return nil, err
+	}
+
+	allKeys, err := cache.listJSONKeys()
 	if err != nil {
 		return nil, err
 	}
@@ -453,6 +544,26 @@ func (c *Cache) keysByPattern(pattern string) ([]string, error) {
 		}
 	}
 	return matched, nil
+}
+
+func (cache *Cache) clearScope(prefix string) error {
+	keys, err := cache.keysByPattern(prefix)
+	if err != nil {
+		return err
+	}
+	descendants, err := cache.keysByPattern(prefix + "/*")
+	if err != nil {
+		return err
+	}
+	keys = append(keys, descendants...)
+
+	for _, key := range keys {
+		if _, err := cache.removeEntryFiles(key); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // matchKeyPattern reports whether key matches the glob pattern.
@@ -474,7 +585,7 @@ func matchKeyPattern(pattern, key string) (bool, error) {
 		if prefix == "" {
 			return true, nil
 		}
-		return key == prefix || core.HasPrefix(key, prefix+"/"), nil
+		return core.HasPrefix(key, prefix+"/"), nil
 	}
 
 	// Otherwise match a single path segment against the last pattern segment.
@@ -548,39 +659,46 @@ func segmentMatch(pattern, name string) (bool, error) {
 	return p == len(pattern), nil
 }
 
-// OnInvalidate registers callback for cache invalidation triggers.
+// OnInvalidate registers a trigger callback that returns patterns to delete.
 //
 //	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
 //		return []string{"dns/*"}
 //	})
-func (c *Cache) OnInvalidate(trigger string, fn InvalidateFunc) {
-	if err := c.ensureReady("cache.OnInvalidate"); err != nil {
+func (cache *Cache) OnInvalidate(trigger string, fn InvalidateFunc) {
+	if err := cache.ensureReady("cache.OnInvalidate"); err != nil {
 		return
 	}
-	c.invalidation[trigger] = append(c.invalidation[trigger], fn)
+	if fn == nil {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.invalidation[trigger] = append(cache.invalidation[trigger], fn)
 }
 
 // Invalidate executes trigger callbacks and deletes matching entries.
 //
 //	deleted, err := c.Invalidate("dns.tree-root-changed")
-func (c *Cache) Invalidate(trigger string) (int, error) {
-	if err := c.ensureReady("cache.Invalidate"); err != nil {
+func (cache *Cache) Invalidate(trigger string) (int, error) {
+	if err := cache.ensureReady("cache.Invalidate"); err != nil {
 		return 0, err
 	}
 
-	callbacks := c.invalidation[trigger]
+	cache.mu.RLock()
+	callbacks := append([]InvalidateFunc(nil), cache.invalidation[trigger]...)
+	cache.mu.RUnlock()
 	total := 0
 	for _, callback := range callbacks {
 		for _, pattern := range callback(trigger) {
 			if pattern == "" {
 				continue
 			}
-			matches, err := c.keysByPattern(pattern)
+			matches, err := cache.keysByPattern(pattern)
 			if err != nil {
 				return total, err
 			}
 			for _, key := range matches {
-				removed, err := c.removeEntryFiles(key)
+				removed, err := cache.removeEntryFiles(key)
 				if err != nil {
 					return total, err
 				}
@@ -597,19 +715,22 @@ func (c *Cache) Invalidate(trigger string) (int, error) {
 // Scoped returns a cache namespaced by origin hash.
 //
 //	scoped := c.Scoped("https://app.example.com")
-func (c *Cache) Scoped(origin string) *ScopedCache {
-	if c == nil {
+//	_ = scoped.Set("user/profile", profile)
+func (cache *Cache) Scoped(origin string) *ScopedCache {
+	if cache == nil {
 		return nil
 	}
 	return &ScopedCache{
-		parent: c,
+		parent: cache,
 		prefix: scopePrefix(origin),
 	}
 }
 
 // ClearScope removes cache entries for a scoped origin.
-func (c *Cache) ClearScope(origin string) error {
-	if err := c.ensureReady("cache.ClearScope"); err != nil {
+//
+//	err := c.ClearScope("https://app.example.com")
+func (cache *Cache) ClearScope(origin string) error {
+	if err := cache.ensureReady("cache.ClearScope"); err != nil {
 		return err
 	}
 
@@ -617,45 +738,130 @@ func (c *Cache) ClearScope(origin string) error {
 	if err := ensureSafeKey(prefix); err != nil {
 		return err
 	}
-	return c.clearScope(prefix)
+	return cache.clearScope(prefix)
 }
 
-func (c *Cache) clearScope(prefix string) error {
-	keys, err := c.keysByPattern(prefix + "/*")
-	if err != nil {
-		return err
-	}
-
-	for _, key := range keys {
-		if _, err := c.removeEntryFiles(key); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (c *Cache) defaultTTL() time.Duration {
-	if c.ttl <= 0 {
+func (cache *Cache) defaultTTL() time.Duration {
+	if cache.cacheTTL <= 0 {
 		return DefaultTTL
 	}
-	return c.ttl
+	return cache.cacheTTL
 }
 
 func ensureSafeKey(key string) error {
 	if key == "" {
 		return core.E("cache.validateKey", "invalid empty key", nil)
 	}
+	if len(key) > maxCacheKeyBytes {
+		return core.E("cache.validateKey", "invalid key: too long", nil)
+	}
 	if core.Contains(key, "\\") {
 		return core.E("cache.validateKey", "invalid key: contains path separators", nil)
 	}
-	if core.Contains(key, "\x00") {
-		return core.E("cache.validateKey", "invalid key: contains null byte", nil)
+	if hasPathDangerousBytes(key) {
+		return core.E("cache.validateKey", "invalid key: contains control bytes", nil)
 	}
 
 	for _, part := range core.Split(key, "/") {
 		if part == "" || part == "." || part == ".." {
 			return core.E("cache.validateKey", "invalid key: path traversal attempt", nil)
+		}
+	}
+
+	return nil
+}
+
+func ensureSafePattern(pattern string) error {
+	if pattern == "" {
+		return core.E("cache.validatePattern", "invalid empty pattern", nil)
+	}
+	if len(pattern) > maxCachePatternBytes {
+		return core.E("cache.validatePattern", "invalid pattern: too long", nil)
+	}
+	if core.Contains(pattern, "\\") || hasPathDangerousBytes(pattern) {
+		return core.E("cache.validatePattern", "invalid pattern: contains control bytes", nil)
+	}
+	return nil
+}
+
+func ensureNoSymlinkPath(baseDir, path string) error {
+	if err := rejectSymlink(baseDir); err != nil {
+		return err
+	}
+
+	if path == baseDir {
+		return nil
+	}
+
+	rel := core.TrimPrefix(path, normalizePath(core.Concat(baseDir, pathSeparator())))
+	if rel == path {
+		return nil
+	}
+
+	current := baseDir
+	for _, part := range core.Split(rel, pathSeparator()) {
+		if part == "" {
+			continue
+		}
+		current = core.JoinPath(current, part)
+		if err := rejectSymlink(current); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return core.E("cache.validatePath", "path contains symlink", nil)
+	}
+	return nil
+}
+
+func hasPathDangerousBytes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureSafeResponseBodyPath(path string) error {
+	if path == "" {
+		return core.E("cache.validateResponseBodyPath", "invalid empty body path", nil)
+	}
+	if len(path) > maxCacheKeyBytes {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: too long", nil)
+	}
+	if core.PathIsAbs(path) {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: absolute paths are not allowed", nil)
+	}
+	if core.Contains(path, "\\") || hasPathDangerousBytes(path) {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: contains control bytes", nil)
+	}
+
+	normalized := normalizePath(path)
+	if !core.HasPrefix(normalized, "responses/") || !core.HasSuffix(normalized, ".bin") {
+		return core.E("cache.validateResponseBodyPath", "invalid body path: expected responses/<key>.bin", nil)
+	}
+
+	rel := core.TrimPrefix(normalized, "responses/")
+	rel = core.TrimSuffix(rel, ".bin")
+	if rel == "" {
+		return core.E("cache.validateResponseBodyPath", "invalid body path", nil)
+	}
+
+	for _, segment := range core.Split(rel, "/") {
+		if err := ensureSafeKey(segment); err != nil {
+			return core.E("cache.validateResponseBodyPath", "invalid body path", err)
 		}
 	}
 
@@ -668,107 +874,176 @@ type ScopedCache struct {
 }
 
 func scopePrefix(origin string) string {
-	sum := sha1.Sum([]byte(origin))
+	sum := sha256.Sum256([]byte(origin))
 	hash := hex.EncodeToString(sum[:])
 	return "scope_" + hash
 }
 
-func (c *ScopedCache) fullKey(key string) string {
-	if key == "" {
-		return c.prefix
-	}
-	return c.prefix + "/" + key
+func (scopedCache *ScopedCache) fullKey(key string) string {
+	return scopedCache.prefix + "/" + key
 }
 
-func (c *ScopedCache) Path(key string) (string, error) {
-	if c == nil || c.parent == nil {
+// Scoped returns a cache namespaced by a different origin.
+//
+//	admin := scoped.Scoped("https://admin.example.com")
+//	_ = admin.Set("user/profile", profile)
+func (scopedCache *ScopedCache) Scoped(origin string) *ScopedCache {
+	if scopedCache == nil || scopedCache.parent == nil {
+		return nil
+	}
+	return scopedCache.parent.Scoped(origin)
+}
+
+func (scopedCache *ScopedCache) Path(key string) (string, error) {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return "", core.E("cache.Scoped.Path", "scoped cache is nil", nil)
 	}
-	return c.parent.Path(c.fullKey(key))
+	return scopedCache.parent.Path(scopedCache.fullKey(key))
 }
 
-func (c *ScopedCache) Get(key string, dest any) (bool, error) {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) Get(key string, dest any) (bool, error) {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return false, core.E("cache.Scoped.Get", "scoped cache is nil", nil)
 	}
-	return c.parent.Get(c.fullKey(key), dest)
+	return scopedCache.parent.Get(scopedCache.fullKey(key), dest)
 }
 
-func (c *ScopedCache) Set(key string, value any) error {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) Set(key string, value any) error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.Set", "scoped cache is nil", nil)
 	}
-	return c.parent.Set(c.fullKey(key), value)
+	return scopedCache.parent.Set(scopedCache.fullKey(key), value)
 }
 
-func (c *ScopedCache) SetWithTTL(key string, value any, ttl time.Duration) error {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) SetWithTTL(key string, value any, ttl time.Duration) error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.SetWithTTL", "scoped cache is nil", nil)
 	}
-	return c.parent.SetWithTTL(c.fullKey(key), value, ttl)
+	return scopedCache.parent.SetWithTTL(scopedCache.fullKey(key), value, ttl)
 }
 
-func (c *ScopedCache) SetBinary(key string, data []byte, contentType string) error {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) SetBinary(key string, data []byte, contentType string) error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.SetBinary", "scoped cache is nil", nil)
 	}
-	return c.parent.SetBinary(c.fullKey(key), data, contentType)
+	return scopedCache.parent.SetBinary(scopedCache.fullKey(key), data, contentType)
 }
 
-func (c *ScopedCache) SetBinaryWithTTL(key string, data []byte, contentType string, ttl time.Duration) error {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) SetBinaryWithTTL(key string, data []byte, contentType string, ttl time.Duration) error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.SetBinaryWithTTL", "scoped cache is nil", nil)
 	}
-	return c.parent.SetBinaryWithTTL(c.fullKey(key), data, contentType, ttl)
+	return scopedCache.parent.SetBinaryWithTTL(scopedCache.fullKey(key), data, contentType, ttl)
 }
 
-func (c *ScopedCache) GetBinary(key string) ([]byte, bool, error) {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) GetBinary(key string) ([]byte, bool, error) {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return nil, false, core.E("cache.Scoped.GetBinary", "scoped cache is nil", nil)
 	}
-	return c.parent.GetBinary(c.fullKey(key))
+	return scopedCache.parent.GetBinary(scopedCache.fullKey(key))
 }
 
-func (c *ScopedCache) Delete(key string) error {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) Delete(key string) error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.Delete", "scoped cache is nil", nil)
 	}
-	return c.parent.Delete(c.fullKey(key))
+	return scopedCache.parent.Delete(scopedCache.fullKey(key))
 }
 
-func (c *ScopedCache) DeleteMany(keys ...string) error {
-	if c == nil || c.parent == nil {
+func (scopedCache *ScopedCache) DeleteMany(keys ...string) error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.DeleteMany", "scoped cache is nil", nil)
 	}
 	full := make([]string, len(keys))
 	for i, key := range keys {
-		full[i] = c.fullKey(key)
+		full[i] = scopedCache.fullKey(key)
 	}
-	return c.parent.DeleteMany(full...)
+	return scopedCache.parent.DeleteMany(full...)
 }
 
-func (c *ScopedCache) Clear() error {
-	if c == nil || c.parent == nil {
+// Clear removes all entries in the scope.
+//
+//	err := scoped.Clear()
+func (scopedCache *ScopedCache) Clear() error {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return core.E("cache.Scoped.Clear", "scoped cache is nil", nil)
 	}
-	return c.parent.clearScope(c.prefix)
+	return scopedCache.parent.clearScope(scopedCache.prefix)
 }
 
-func (c *ScopedCache) Age(key string) time.Duration {
-	if c == nil || c.parent == nil {
+// ClearScope removes cache entries for a scoped origin.
+//
+//	err := scoped.ClearScope("https://app.example.com")
+func (scopedCache *ScopedCache) ClearScope(origin string) error {
+	if scopedCache == nil || scopedCache.parent == nil {
+		return core.E("cache.Scoped.ClearScope", "scoped cache is nil", nil)
+	}
+	return scopedCache.parent.ClearScope(origin)
+}
+
+func (scopedCache *ScopedCache) OnInvalidate(trigger string, fn InvalidateFunc) {
+	if scopedCache == nil || scopedCache.parent == nil {
+		return
+	}
+	if fn == nil {
+		return
+	}
+
+	prefix := scopedCache.prefix
+	scopedCache.parent.OnInvalidate(trigger, func(trigger string) []string {
+		patterns := fn(trigger)
+		if len(patterns) == 0 {
+			return nil
+		}
+
+		scopedPatterns := make([]string, 0, len(patterns))
+		for _, pattern := range patterns {
+			if pattern == "" {
+				continue
+			}
+			scopedPatterns = append(scopedPatterns, scopePattern(prefix, pattern))
+		}
+		return scopedPatterns
+	})
+}
+
+func (scopedCache *ScopedCache) Invalidate(trigger string) (int, error) {
+	if scopedCache == nil || scopedCache.parent == nil {
+		return 0, core.E("cache.Scoped.Invalidate", "scoped cache is nil", nil)
+	}
+	return scopedCache.parent.Invalidate(trigger)
+}
+
+func (scopedCache *ScopedCache) Age(key string) time.Duration {
+	if scopedCache == nil || scopedCache.parent == nil {
 		return -1
 	}
-	return c.parent.Age(c.fullKey(key))
+	return scopedCache.parent.Age(scopedCache.fullKey(key))
+}
+
+func scopePattern(prefix, pattern string) string {
+	pattern = strings.TrimPrefix(pattern, "/")
+	if pattern == "" {
+		return prefix
+	}
+	return prefix + "/" + pattern
 }
 
 // CacheStorage manages named caches for HTTP cache API emulation.
+//
+//	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
+//	appCache, err := storage.Open("my-app-v1")
+//	defer storage.Close()
 type CacheStorage struct {
 	medium  coreio.Medium
 	baseDir string
 	caches  map[string]*HTTPCache
+	mu      sync.RWMutex
 }
 
 // NewCacheStorage creates a namespace container for HTTPCache instances.
+//
+//	storage, err := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
 func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error) {
 	if medium == nil {
 		medium = coreio.Local
@@ -795,49 +1070,58 @@ func NewCacheStorage(medium coreio.Medium, baseDir string) (*CacheStorage, error
 	}, nil
 }
 
-// Open retrieves a named HTTPCache.
+// Open retrieves a named HTTPCache, creating it on first use.
 //
+//	staticCache, err := storage.Open("static-assets-v2")
 //	api, err := storage.Open("api-responses")
-func (cs *CacheStorage) Open(name string) (*HTTPCache, error) {
-	if cs == nil {
-		return nil, core.E("cache.CacheStorage.Open", "cache storage is nil", nil)
+func (storage *CacheStorage) Open(name string) (*HTTPCache, error) {
+	if err := storage.ensureReady("cache.CacheStorage.Open"); err != nil {
+		return nil, err
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Open", name); err != nil {
 		return nil, err
 	}
 
-	if cache, ok := cs.caches[name]; ok {
-		return cache, nil
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if httpCache, ok := storage.caches[name]; ok {
+		return httpCache, nil
 	}
 
-	cacheDir := core.JoinPath(cs.baseDir, name)
-	if err := cs.medium.EnsureDir(cacheDir); err != nil {
+	cacheDir := core.JoinPath(storage.baseDir, name)
+	if err := storage.medium.EnsureDir(cacheDir); err != nil {
 		return nil, core.E("cache.CacheStorage.Open", "failed to create cache directory", err)
 	}
 
-	cache := &HTTPCache{
+	httpCache := &HTTPCache{
 		name:    name,
-		medium:  cs.medium,
+		medium:  storage.medium,
 		baseDir: cacheDir,
 	}
-	cs.caches[name] = cache
-	return cache, nil
+	storage.caches[name] = httpCache
+	return httpCache, nil
 }
 
 // Delete removes a named HTTP cache and all entries.
 //
-//	err := storage.Delete("old-cache")
-func (cs *CacheStorage) Delete(name string) error {
-	if cs == nil {
-		return core.E("cache.CacheStorage.Delete", "cache storage is nil", nil)
+//	err := storage.Delete("static-assets-v1")
+//	err = storage.Delete("old-cache")
+func (storage *CacheStorage) Delete(name string) error {
+	if err := storage.ensureReady("cache.CacheStorage.Delete"); err != nil {
+		return err
 	}
 	if err := ensureSafeCacheName("cache.CacheStorage.Delete", name); err != nil {
 		return err
 	}
 
-	delete(cs.caches, name)
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	if err := storage.medium.DeleteAll(core.JoinPath(storage.baseDir, name)); err != nil && !core.Is(err, fs.ErrNotExist) {
+		return core.E("cache.CacheStorage.Delete", "failed to delete cache directory", err)
+	}
 
-	return cs.medium.DeleteAll(core.JoinPath(cs.baseDir, name))
+	delete(storage.caches, name)
+	return nil
 }
 
 // ensureSafeCacheName rejects empty, path-separator, or traversal cache names.
@@ -845,10 +1129,16 @@ func ensureSafeCacheName(op, name string) error {
 	if name == "" {
 		return core.E(op, "cache name is empty", nil)
 	}
+	if len(name) > maxCacheNameBytes {
+		return core.E(op, "invalid cache name: too long", nil)
+	}
 	if core.Contains(name, "/") || core.Contains(name, `\`) {
 		return core.E(op, "invalid cache name", nil)
 	}
-	if core.Contains(name, "..") {
+	if hasPathDangerousBytes(name) {
+		return core.E(op, "invalid cache name", nil)
+	}
+	if name == "." || name == ".." {
 		return core.E(op, "invalid cache name", nil)
 	}
 	return nil
@@ -857,44 +1147,115 @@ func ensureSafeCacheName(op, name string) error {
 // Keys lists all named caches.
 //
 //	names, err := storage.Keys()
-func (cs *CacheStorage) Keys() ([]string, error) {
-	if cs == nil {
-		return nil, core.E("cache.CacheStorage.Keys", "cache storage is nil", nil)
+//	// ["static-assets-v2", "api-responses"]
+func (storage *CacheStorage) Keys() ([]string, error) {
+	if err := storage.ensureReady("cache.CacheStorage.Keys"); err != nil {
+		return nil, err
 	}
 
-	entries, err := cs.medium.List(cs.baseDir)
+	storage.mu.RLock()
+	names := make(map[string]struct{}, len(storage.caches))
+	for name := range storage.caches {
+		names[name] = struct{}{}
+	}
+	storage.mu.RUnlock()
+
+	entries, err := storage.medium.List(storage.baseDir)
 	if err != nil {
-		if core.Is(err, fs.ErrNotExist) {
-			return []string{}, nil
+		if !core.Is(err, fs.ErrNotExist) {
+			return nil, core.E("cache.CacheStorage.Keys", "failed to list caches", err)
 		}
-		return nil, core.E("cache.CacheStorage.Keys", "failed to list caches", err)
 	}
 
-	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
-			names = append(names, entry.Name())
+			names[entry.Name()] = struct{}{}
 		}
 	}
-	slices.Sort(names)
-	return names, nil
+
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // Close releases storage resources for compatibility with long-lived workflows.
-func (cs *CacheStorage) Close() error { return nil }
+//
+//	_ = storage.Close()
+//	appCache, err := storage.Open("reused-cache")
+func (storage *CacheStorage) Close() error {
+	if storage == nil {
+		return nil
+	}
+	storage.mu.Lock()
+	storage.caches = make(map[string]*HTTPCache)
+	storage.mu.Unlock()
+	return nil
+}
 
 // HTTPCache stores request/response pairs.
+//
+//	storage, _ := cache.NewCacheStorage(coreio.Local, "/tmp/cache-storage")
+//	appCache, _ := storage.Open("my-app-v1")
+//	err := appCache.Put(req, resp, body)
 type HTTPCache struct {
 	name    string
 	medium  coreio.Medium
 	baseDir string
 }
 
+func (storage *CacheStorage) ensureReady(op string) error {
+	if storage == nil {
+		return core.E(op, "cache storage is nil", nil)
+	}
+	if storage.medium == nil {
+		return core.E(op, "cache storage medium is nil; construct via cache.NewCacheStorage", nil)
+	}
+	if storage.baseDir == "" {
+		return core.E(op, "cache storage base directory is empty; construct via cache.NewCacheStorage", nil)
+	}
+	storage.mu.Lock()
+	if storage.caches == nil {
+		storage.caches = make(map[string]*HTTPCache)
+	}
+	storage.mu.Unlock()
+	return nil
+}
+
+func (httpCache *HTTPCache) ensureReady(op string) error {
+	if httpCache == nil {
+		return core.E(op, "http cache is nil", nil)
+	}
+	if httpCache.medium == nil {
+		return core.E(op, "http cache medium is nil; construct via cache.CacheStorage.Open", nil)
+	}
+	if httpCache.baseDir == "" {
+		return core.E(op, "http cache base directory is empty; construct via cache.CacheStorage.Open", nil)
+	}
+	return nil
+}
+
+// CachedRequest identifies a request by URL and method.
+//
+//	req := cache.CachedRequest{
+//		URL:    "https://api.example.com/users",
+//		Method: "GET",
+//	}
 type CachedRequest struct {
 	URL    string `json:"url"`
 	Method string `json:"method"`
 }
 
+// CachedResponse stores HTTP metadata for a cached response body.
+//
+//	resp := cache.CachedResponse{
+//		Status:     200,
+//		StatusText: "OK",
+//		Headers:    map[string]string{"Content-Type": "application/json"},
+//		BodyPath:   "responses/a1b2c3.bin",
+//	}
 type CachedResponse struct {
 	Status     int               `json:"status"`
 	StatusText string            `json:"status_text"`
@@ -903,16 +1264,22 @@ type CachedResponse struct {
 	CachedAt   time.Time         `json:"cached_at"`
 }
 
-func (hc *HTTPCache) storagePath(parts ...string) string {
-	args := append([]string{hc.baseDir}, parts...)
+type cachedResponseRecord struct {
+	Request  CachedRequest  `json:"request"`
+	Response CachedResponse `json:"response"`
+}
+
+func (httpCache *HTTPCache) storagePath(parts ...string) string {
+	args := append([]string{httpCache.baseDir}, parts...)
 	return core.JoinPath(args...)
 }
 
-func (hc *HTTPCache) requestKey(req CachedRequest) (string, error) {
-	if core.Trim(req.URL) == "" || core.Trim(req.Method) == "" {
-		return "", core.E("cache.HTTPCache.requestKey", "request URL and method are required", nil)
-	}
-	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL)), nil
+func (httpCache *HTTPCache) requestKey(req CachedRequest) (string, error) {
+	return requestStorageKey(req)
+}
+
+func legacyRequestKey(req CachedRequest) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(req.Method + "\x00" + req.URL))
 }
 
 func decodeRequestKey(encoded string) (CachedRequest, error) {
@@ -931,85 +1298,170 @@ func decodeRequestKey(encoded string) (CachedRequest, error) {
 	}, nil
 }
 
-func (hc *HTTPCache) responseMetaPath(key string) string {
-	return hc.storagePath("responses", key+".json")
+func (httpCache *HTTPCache) responseMetaPath(key string) string {
+	return httpCache.storagePath("responses", key+".json")
 }
 
-func (hc *HTTPCache) responseBinaryPath(key string) string {
-	return hc.storagePath("responses", key+".bin")
+func (httpCache *HTTPCache) responseBinaryPath(key string) string {
+	return httpCache.storagePath("responses", key+".bin")
 }
 
-func (hc *HTTPCache) readResponse(key string) (*CachedResponse, error) {
-	raw, err := hc.medium.Read(hc.responseMetaPath(key))
+func (httpCache *HTTPCache) readResponseRecord(key string) (*cachedResponseRecord, error) {
+	raw, err := httpCache.medium.Read(httpCache.responseMetaPath(key))
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, core.E("cache.HTTPCache.readResponse", "failed to read cached response", err)
+		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to read cached response", err)
 	}
 
+	var envelope map[string]json.RawMessage
+	envelopeResult := core.JSONUnmarshalString(raw, &envelope)
+	if !envelopeResult.OK {
+		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", envelopeResult.Value.(error))
+	}
+
+	_, hasRequest := envelope["request"]
+	_, hasResponse := envelope["response"]
+
+	if hasRequest || hasResponse {
+		if !hasRequest || !hasResponse {
+			return nil, core.E("cache.HTTPCache.readResponseRecord", "cached response envelope is incomplete", nil)
+		}
+
+		var record cachedResponseRecord
+		recordResult := core.JSONUnmarshalString(raw, &record)
+		if !recordResult.OK {
+			return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", recordResult.Value.(error))
+		}
+		if err := validateCachedResponseRecord(key, &record); err != nil {
+			return nil, err
+		}
+		return &record, nil
+	}
+
+	var record cachedResponseRecord
 	var response CachedResponse
 	responseResult := core.JSONUnmarshalString(raw, &response)
 	if !responseResult.OK {
-		return nil, core.E("cache.HTTPCache.readResponse", "failed to unmarshal cached response", responseResult.Value.(error))
+		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", responseResult.Value.(error))
 	}
 
-	return &response, nil
-}
-
-// Match finds a cached response for request.
-//
-//	resp, err := cache.Match(cache.CachedRequest{URL:"https://x", Method:"GET"})
-func (hc *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
-	if hc == nil {
-		return nil, core.E("cache.HTTPCache.Match", "http cache is nil", nil)
-	}
-	key, err := hc.requestKey(req)
+	req, err := decodeRequestKey(key)
 	if err != nil {
 		return nil, err
 	}
 
-	return hc.readResponse(key)
+	record = cachedResponseRecord{
+		Request:  req,
+		Response: response,
+	}
+	if err := validateCachedResponseRecord(key, &record); err != nil {
+		return nil, err
+	}
+
+	return &record, nil
 }
 
-// Put stores request/response pair and response body.
-func (hc *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []byte) error {
-	if hc == nil {
-		return core.E("cache.HTTPCache.Put", "http cache is nil", nil)
+// Match finds a cached response for request.
+//
+//	resp, err := cache.Match(cache.CachedRequest{URL: "https://x", Method: "GET"})
+func (httpCache *HTTPCache) Match(req CachedRequest) (*CachedResponse, error) {
+	if err := httpCache.ensureReady("cache.HTTPCache.Match"); err != nil {
+		return nil, err
 	}
-	key, err := hc.requestKey(req)
+	if err := validateCachedRequest(req); err != nil {
+		return nil, core.E("cache.HTTPCache.Match", "invalid cached request", err)
+	}
+	key, err := httpCache.requestKey(req)
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := httpCache.readResponseRecord(key)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		record, err = httpCache.readResponseRecord(legacyRequestKey(req))
+	}
+	if err != nil || record == nil {
+		return nil, err
+	}
+	return &record.Response, nil
+}
+
+// Put stores a request/response pair and its body.
+//
+//	err := appCache.Put(
+//	    cache.CachedRequest{URL: "https://example.com/style.css", Method: "GET"},
+//	    cache.CachedResponse{Status: 200, Headers: headers},
+//	    bodyBytes,
+//	)
+func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []byte) error {
+	if err := httpCache.ensureReady("cache.HTTPCache.Put"); err != nil {
+		return err
+	}
+	key, err := httpCache.requestKey(req)
 	if err != nil {
 		return err
+	}
+	resp.BodyPath = core.JoinPath("responses", key+".bin")
+	if err := validateCachedRequest(req); err != nil {
+		return core.E("cache.HTTPCache.Put", "invalid cached request", err)
 	}
 	if resp.Headers == nil {
 		resp.Headers = make(map[string]string)
 	}
+	if err := validateCachedResponse(resp); err != nil {
+		return core.E("cache.HTTPCache.Put", "invalid cached response", err)
+	}
 
-	if err := hc.medium.EnsureDir(hc.storagePath("responses")); err != nil {
+	if err := httpCache.medium.EnsureDir(httpCache.storagePath("responses")); err != nil {
 		return core.E("cache.HTTPCache.Put", "failed to create response directory", err)
 	}
 
+	metaPath := httpCache.responseMetaPath(key)
+	binaryPath := httpCache.responseBinaryPath(key)
+	metaSnapshot, err := readFileSnapshot(httpCache.medium, metaPath)
+	if err != nil {
+		return core.E("cache.HTTPCache.Put", "failed to inspect existing cached response metadata", err)
+	}
+	binarySnapshot, err := readFileSnapshot(httpCache.medium, binaryPath)
+	if err != nil {
+		return core.E("cache.HTTPCache.Put", "failed to inspect existing cached response body", err)
+	}
+
 	resp.CachedAt = time.Now()
-	resp.BodyPath = core.JoinPath("responses", key+".bin")
-	meta, err := store.MarshalIndent(resp, "", "  ")
+	record := cachedResponseRecord{
+		Request:  req,
+		Response: resp,
+	}
+	meta, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return core.E("cache.HTTPCache.Put", "failed to marshal cached response", err)
 	}
 
-	if err := hc.medium.Write(hc.responseMetaPath(key), string(meta)); err != nil {
-		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
-	}
-	if err := hc.medium.Write(hc.responseBinaryPath(key), string(body)); err != nil {
+	if err := httpCache.medium.Write(binaryPath, string(body)); err != nil {
+		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
+		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
 		return core.E("cache.HTTPCache.Put", "failed to write cached response body", err)
+	}
+	if err := httpCache.medium.Write(metaPath, string(meta)); err != nil {
+		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
+		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
+		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
 	}
 
 	return nil
 }
 
 // ReadBody returns the response body bytes from medium.
-func (hc *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
-	if hc == nil {
-		return nil, core.E("cache.HTTPCache.ReadBody", "http cache is nil", nil)
+//
+//	body, err := appCache.ReadBody(resp)
+func (httpCache *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
+	if err := httpCache.ensureReady("cache.HTTPCache.ReadBody"); err != nil {
+		return nil, err
 	}
 	if resp == nil {
 		return nil, core.E("cache.HTTPCache.ReadBody", "response is nil", nil)
@@ -1017,49 +1469,190 @@ func (hc *HTTPCache) ReadBody(resp *CachedResponse) ([]byte, error) {
 	if resp.BodyPath == "" {
 		return nil, core.E("cache.HTTPCache.ReadBody", "response has empty body path", nil)
 	}
-	body, err := hc.medium.Read(hc.storagePath(resp.BodyPath))
+	if err := ensureSafeResponseBodyPath(resp.BodyPath); err != nil {
+		return nil, core.E("cache.HTTPCache.ReadBody", "invalid response body path", err)
+	}
+	body, err := httpCache.medium.Read(httpCache.storagePath(resp.BodyPath))
 	if err != nil {
 		return nil, core.E("cache.HTTPCache.ReadBody", "failed to read response body", err)
 	}
 	return []byte(body), nil
 }
 
+func validateCachedResponseRecord(key string, record *cachedResponseRecord) error {
+	if record == nil {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached response record is nil", nil)
+	}
+
+	if err := validateCachedRequest(record.Request); err != nil {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "invalid cached request", err)
+	}
+
+	expectedKey, err := requestStorageKey(record.Request)
+	if err != nil {
+		return err
+	}
+	legacyKey := legacyRequestKey(record.Request)
+	if key != expectedKey && key != legacyKey {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached request metadata does not match cache key", nil)
+	}
+
+	if err := validateCachedResponse(record.Response); err != nil {
+		return err
+	}
+	expectedBodyPaths := []string{
+		core.JoinPath("responses", expectedKey+".bin"),
+		core.JoinPath("responses", legacyKey+".bin"),
+	}
+	if !slices.Contains(expectedBodyPaths, record.Response.BodyPath) {
+		return core.E("cache.HTTPCache.validateCachedResponseRecord", "cached response body path does not match cache key", nil)
+	}
+
+	return nil
+}
+
+func requestStorageKey(req CachedRequest) (string, error) {
+	if err := validateCachedRequest(req); err != nil {
+		return "", core.E("cache.HTTPCache.requestStorageKey", "invalid cached request", err)
+	}
+
+	sum := sha256.Sum256([]byte(req.Method + "\x00" + req.URL))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func validateCachedRequest(req CachedRequest) error {
+	if core.Trim(req.URL) == "" || core.Trim(req.Method) == "" {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request URL and method are required", nil)
+	}
+	if len(req.URL) > maxCachedRequestURLBytes {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request URL is too long", nil)
+	}
+	if len(req.Method) > maxCachedRequestMethodBytes {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request method is too long", nil)
+	}
+	if hasHTTPDangerousBytes(req.URL) || hasHTTPDangerousBytes(req.Method) {
+		return core.E("cache.HTTPCache.validateCachedRequest", "request contains control characters", nil)
+	}
+	if !isHTTPToken(req.Method) {
+		return core.E("cache.HTTPCache.validateCachedRequest", "invalid HTTP method", nil)
+	}
+	return nil
+}
+
+func validateCachedResponse(resp CachedResponse) error {
+	if resp.Status < 100 || resp.Status > 599 {
+		return core.E("cache.HTTPCache.validateCachedResponse", "invalid HTTP status", nil)
+	}
+	if hasHTTPDangerousBytes(resp.StatusText) {
+		return core.E("cache.HTTPCache.validateCachedResponse", "invalid HTTP status text", nil)
+	}
+	if len(resp.StatusText) > maxCachedStatusTextBytes {
+		return core.E("cache.HTTPCache.validateCachedResponse", "HTTP status text is too long", nil)
+	}
+	if err := ensureSafeResponseBodyPath(resp.BodyPath); err != nil {
+		return core.E("cache.HTTPCache.validateCachedResponse", "invalid response body path", err)
+	}
+	if len(resp.Headers) > maxCachedHeaderCount {
+		return core.E("cache.HTTPCache.validateCachedResponse", "too many response headers", nil)
+	}
+	for name, value := range resp.Headers {
+		if len(name) > maxCachedHeaderNameBytes {
+			return core.E("cache.HTTPCache.validateCachedResponse", "response header name is too long", nil)
+		}
+		if len(value) > maxCachedHeaderValueBytes {
+			return core.E("cache.HTTPCache.validateCachedResponse", "response header value is too long", nil)
+		}
+		if err := validateHTTPHeaderName(name); err != nil {
+			return core.E("cache.HTTPCache.validateCachedResponse", "invalid response header name", err)
+		}
+		if hasHTTPDangerousBytes(value) {
+			return core.E("cache.HTTPCache.validateCachedResponse", "invalid response header value", nil)
+		}
+	}
+	return nil
+}
+
+func validateHTTPHeaderName(name string) error {
+	if name == "" {
+		return core.E("cache.HTTPCache.validateHTTPHeaderName", "header name is empty", nil)
+	}
+	if !isHTTPToken(name) {
+		return core.E("cache.HTTPCache.validateHTTPHeaderName", "invalid header name", nil)
+	}
+	return nil
+}
+
+func hasHTTPDangerousBytes(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func isHTTPToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Delete removes a cached request/response pair.
-func (hc *HTTPCache) Delete(req CachedRequest) error {
-	if hc == nil {
-		return core.E("cache.HTTPCache.Delete", "http cache is nil", nil)
+//
+//	err := appCache.Delete(cache.CachedRequest{URL: "https://example.com/old.js", Method: "GET"})
+func (httpCache *HTTPCache) Delete(req CachedRequest) error {
+	if err := httpCache.ensureReady("cache.HTTPCache.Delete"); err != nil {
+		return err
+	}
+	if err := validateCachedRequest(req); err != nil {
+		return core.E("cache.HTTPCache.Delete", "invalid cached request", err)
 	}
 
-	key, err := hc.requestKey(req)
+	key, err := httpCache.requestKey(req)
 	if err != nil {
 		return err
 	}
 
-	response, err := hc.readResponse(key)
-	if err != nil {
-		return err
-	}
-	if response == nil {
-		return nil
-	}
-
-	if err := hc.medium.Delete(hc.responseMetaPath(key)); err != nil && !core.Is(err, fs.ErrNotExist) {
+	if err := httpCache.medium.Delete(httpCache.responseMetaPath(key)); err != nil && !core.Is(err, fs.ErrNotExist) {
 		return core.E("cache.HTTPCache.Delete", "failed to delete cached response metadata", err)
 	}
-	if err := hc.medium.Delete(hc.responseBinaryPath(key)); err != nil && !core.Is(err, fs.ErrNotExist) {
+	if err := httpCache.medium.Delete(httpCache.responseBinaryPath(key)); err != nil && !core.Is(err, fs.ErrNotExist) {
 		return core.E("cache.HTTPCache.Delete", "failed to delete cached response body", err)
+	}
+	legacyKey := legacyRequestKey(req)
+	if legacyKey != key {
+		if err := httpCache.medium.Delete(httpCache.responseMetaPath(legacyKey)); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return core.E("cache.HTTPCache.Delete", "failed to delete legacy cached response metadata", err)
+		}
+		if err := httpCache.medium.Delete(httpCache.responseBinaryPath(legacyKey)); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return core.E("cache.HTTPCache.Delete", "failed to delete legacy cached response body", err)
+		}
 	}
 
 	return nil
 }
 
 // Keys returns all cached request URLs.
-func (hc *HTTPCache) Keys() ([]string, error) {
-	if hc == nil {
-		return nil, core.E("cache.HTTPCache.Keys", "http cache is nil", nil)
+//
+//	urls, err := appCache.Keys()
+//	// ["https://example.com/style.css", "https://example.com/app.js"]
+func (httpCache *HTTPCache) Keys() ([]string, error) {
+	if err := httpCache.ensureReady("cache.HTTPCache.Keys"); err != nil {
+		return nil, err
 	}
 
-	entries, err := hc.medium.List(hc.storagePath("responses"))
+	entries, err := httpCache.medium.List(httpCache.storagePath("responses"))
 	if err != nil {
 		if core.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
@@ -1067,6 +1660,7 @@ func (hc *HTTPCache) Keys() ([]string, error) {
 		return nil, core.E("cache.HTTPCache.Keys", "failed to list response entries", err)
 	}
 
+	seen := make(map[string]struct{})
 	var urls []string
 	for _, entry := range entries {
 		name := entry.Name()
@@ -1074,15 +1668,56 @@ func (hc *HTTPCache) Keys() ([]string, error) {
 			continue
 		}
 		key := core.TrimSuffix(name, ".json")
-		req, err := decodeRequestKey(key)
+		record, err := httpCache.readResponseRecord(key)
 		if err != nil {
 			continue
 		}
-		urls = append(urls, req.URL)
+		if record == nil || record.Request.URL == "" {
+			continue
+		}
+		if _, ok := seen[record.Request.URL]; ok {
+			continue
+		}
+		seen[record.Request.URL] = struct{}{}
+		urls = append(urls, record.Request.URL)
 	}
 
 	slices.Sort(urls)
 	return urls, nil
+}
+
+type fileSnapshot struct {
+	path    string
+	existed bool
+	content string
+}
+
+func readFileSnapshot(medium coreio.Medium, path string) (fileSnapshot, error) {
+	content, err := medium.Read(path)
+	if err != nil {
+		if core.Is(err, fs.ErrNotExist) {
+			return fileSnapshot{path: path}, nil
+		}
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{
+		path:    path,
+		existed: true,
+		content: content,
+	}, nil
+}
+
+func restoreFileSnapshot(medium coreio.Medium, snapshot fileSnapshot) error {
+	if snapshot.path == "" {
+		return nil
+	}
+	if !snapshot.existed {
+		if err := medium.Delete(snapshot.path); err != nil && !core.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return medium.Write(snapshot.path, snapshot.content)
 }
 
 // Clear removes all cached items under the cache base directory.
@@ -1132,14 +1767,18 @@ func (c *Cache) Age(key string) time.Duration {
 //
 //	key := cache.GitHubReposKey("acme")
 func GitHubReposKey(org string) string {
-	return core.JoinPath("github", org, "repos")
+	return core.JoinPath("github", encodePathSegment(org), "repos")
 }
 
 // GitHubRepoKey returns the cache key used for a repository metadata entry.
 //
 //	key := cache.GitHubRepoKey("acme", "widgets")
 func GitHubRepoKey(org, repo string) string {
-	return core.JoinPath("github", org, repo, "meta")
+	return core.JoinPath("github", encodePathSegment(org), encodePathSegment(repo), "meta")
+}
+
+func encodePathSegment(segment string) string {
+	return url.PathEscape(segment)
 }
 
 func pathSeparator() string {
@@ -1176,6 +1815,10 @@ func absolutePath(path string) string {
 }
 
 func currentDir() string {
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		return normalizePath(cwd)
+	}
+
 	cwd := normalizePath(core.Env("PWD"))
 	if cwd != "" && cwd != "." {
 		return cwd

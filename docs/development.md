@@ -168,8 +168,8 @@ the [architecture](architecture.md) document for the full method mapping.
 
 ```go
 import (
-    "forge.lthn.ai/core/go-cache"
-    "forge.lthn.ai/core/go-io/store"
+    "dappco.re/go/cache"
+    "dappco.re/go/core/io/store"
     "time"
 )
 
