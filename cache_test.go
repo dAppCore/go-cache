@@ -2546,3 +2546,119 @@ func TestCache_HTTPCache_Match_Bad(t *testing.T) {
 		t.Fatal("expected missing cached response to return nil")
 	}
 }
+
+func TestCache_ThreatUntrustedKeyDoS_RejectsOversizedKeysOnWritePaths(t *testing.T) {
+	c, medium := newTestCache(t, "/tmp/cache-threat-untrusted-key", time.Minute)
+	key := strings.Repeat("a", 4097)
+
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "set",
+			fn: func() error {
+				return c.Set(key, "value")
+			},
+		},
+		{
+			name: "set-with-ttl",
+			fn: func() error {
+				return c.SetWithTTL(key, "value", time.Minute)
+			},
+		},
+		{
+			name: "set-binary",
+			fn: func() error {
+				return c.SetBinary(key, []byte("value"), "text/plain")
+			},
+		},
+		{
+			name: "set-binary-with-ttl",
+			fn: func() error {
+				return c.SetBinaryWithTTL(key, []byte("value"), "text/plain", time.Minute)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.fn(); err == nil {
+				t.Fatalf("expected %s to reject oversized cache key", tt.name)
+			}
+		})
+	}
+
+	if len(medium.Files) != 0 {
+		t.Fatalf("oversized rejected keys should not write cache files, got %d", len(medium.Files))
+	}
+}
+
+func TestCache_ThreatPathTraversal_ScopedOriginIsHashedAndKeysStillValidated(t *testing.T) {
+	c, _ := newTestCache(t, "/tmp/cache-threat-scoped-path", time.Minute)
+	scoped := c.Scoped("../../evil\norigin")
+	if scoped == nil {
+		t.Fatal("expected scoped cache")
+	}
+
+	if err := scoped.Set("safe-key", "value"); err != nil {
+		t.Fatalf("scoped Set with hostile origin failed: %v", err)
+	}
+	path, err := scoped.Path("safe-key")
+	if err != nil {
+		t.Fatalf("scoped Path failed: %v", err)
+	}
+	if strings.Contains(path, "evil") || strings.Contains(path, "..") || strings.Contains(path, "\n") {
+		t.Fatalf("expected scoped path to omit raw origin, got %q", path)
+	}
+
+	if err := scoped.Set("../../escape", "value"); err == nil {
+		t.Fatal("expected scoped Set to reject traversal key")
+	}
+}
+
+func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *testing.T) {
+	medium := coreio.NewMockMedium()
+	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-threat-http-path")
+	if err != nil {
+		t.Fatalf("NewCacheStorage failed: %v", err)
+	}
+
+	httpCache, err := storage.Open("assets")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	req := cache.CachedRequest{
+		URL:    "https://example.com/../../secret.css?file=../secret",
+		Method: "GET",
+	}
+	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
+	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	key := httpCacheStorageKey(req)
+	if _, ok := medium.Files["/tmp/cache-threat-http-path/assets/responses/"+key+".json"]; !ok {
+		t.Fatal("expected HTTP metadata to be stored under hashed request key")
+	}
+	if _, ok := medium.Files["/tmp/cache-threat-http-path/assets/responses/"+key+".bin"]; !ok {
+		t.Fatal("expected HTTP body to be stored under hashed request key")
+	}
+	for path := range medium.Files {
+		if strings.Contains(path, "..") || strings.Contains(path, "secret.css") {
+			t.Fatalf("expected stored path to omit raw request URL, got %q", path)
+		}
+	}
+
+	matched, err := httpCache.Match(req)
+	if err != nil {
+		t.Fatalf("Match failed: %v", err)
+	}
+	if matched == nil {
+		t.Fatal("expected cached response to match")
+	}
+	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "../../escape"}); err == nil {
+		t.Fatal("expected ReadBody to reject traversal body path")
+	}
+}
