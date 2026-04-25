@@ -4,16 +4,23 @@
 package cache
 
 import (
+	// Note: AX-6 — no core equivalent for SHA-256 hashing.
 	"crypto/sha256"
+	// Note: AX-6 — no core equivalent for URL-safe base64 encoding.
 	"encoding/base64"
+	// Note: AX-6 — no core equivalent for hex encoding.
 	"encoding/hex"
-	"encoding/json"
+	// Note: AX-6 — no core equivalent for fs.ErrNotExist or fs interfaces returned by Medium.List.
 	"io/fs"
+	// Note: AX-6 — no core equivalent for URL path escaping.
 	"net/url"
+	// Note: AX-6 — no core equivalent for Lstat symlink checks or dynamic working directory lookup.
 	"os"
 	"slices"
 	"strings"
+	// Note: AX-6 — core.RWMutex is not available in the pinned core module.
 	"sync"
+	// Note: AX-6 — no core equivalent for durations or wall-clock timestamps.
 	"time"
 
 	"dappco.re/go/core"
@@ -59,9 +66,125 @@ type Cache struct {
 //		ExpiresAt: time.Now().Add(time.Hour),
 //	}
 type Entry struct {
-	Data      json.RawMessage `json:"data"`
-	CachedAt  time.Time       `json:"cached_at"`
-	ExpiresAt time.Time       `json:"expires_at"`
+	Data      rawJSON   `json:"data"`
+	CachedAt  time.Time `json:"cached_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type rawJSON []byte
+
+func (raw rawJSON) MarshalJSON() ([]byte, error) {
+	if raw == nil {
+		return []byte("null"), nil
+	}
+	return raw, nil
+}
+
+func (raw *rawJSON) UnmarshalJSON(data []byte) error {
+	if raw == nil {
+		return core.E("cache.rawJSON.UnmarshalJSON", "target is nil", nil)
+	}
+	*raw = append((*raw)[0:0], data...)
+	return nil
+}
+
+func marshalPrettyJSON(value any) (string, error) {
+	result := core.JSONMarshal(value)
+	if !result.OK {
+		return "", result.Value.(error)
+	}
+	return indentJSON(result.Value.([]byte)), nil
+}
+
+func indentJSON(data []byte) string {
+	var builder strings.Builder
+	indent := 0
+	inString := false
+	escaped := false
+
+	writeIndent := func() {
+		for i := 0; i < indent; i++ {
+			builder.WriteString("  ")
+		}
+	}
+
+	for i, c := range data {
+		if inString {
+			builder.WriteByte(c)
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch c {
+		case '"':
+			inString = true
+			builder.WriteByte(c)
+		case '{', '[':
+			builder.WriteByte(c)
+			next := nextNonJSONSpace(data, i+1)
+			if next >= 0 && ((c == '{' && data[next] == '}') || (c == '[' && data[next] == ']')) {
+				continue
+			}
+			indent++
+			builder.WriteByte('\n')
+			writeIndent()
+		case '}', ']':
+			previous := previousNonJSONSpace(data, i-1)
+			if previous >= 0 && ((c == '}' && data[previous] == '{') || (c == ']' && data[previous] == '[')) {
+				builder.WriteByte(c)
+				continue
+			}
+			if indent > 0 {
+				indent--
+			}
+			builder.WriteByte('\n')
+			writeIndent()
+			builder.WriteByte(c)
+		case ',':
+			builder.WriteByte(c)
+			builder.WriteByte('\n')
+			writeIndent()
+		case ':':
+			builder.WriteString(": ")
+		default:
+			if !isJSONSpace(c) {
+				builder.WriteByte(c)
+			}
+		}
+	}
+
+	return builder.String()
+}
+
+func nextNonJSONSpace(data []byte, start int) int {
+	for i := start; i < len(data); i++ {
+		if !isJSONSpace(data[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func previousNonJSONSpace(data []byte, start int) int {
+	for i := start; i >= 0; i-- {
+		if !isJSONSpace(data[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
 }
 
 // BinaryMeta is the metadata for binary cache payloads.
@@ -266,17 +389,17 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 
 	now := time.Now()
 	entry := Entry{
-		Data:      dataResult.Value.([]byte),
+		Data:      rawJSON(dataResult.Value.([]byte)),
 		CachedAt:  now,
 		ExpiresAt: now.Add(ttl),
 	}
 
-	entryBytes, err := json.MarshalIndent(entry, "", "  ")
+	entryJSON, err := marshalPrettyJSON(entry)
 	if err != nil {
 		return core.E("cache.Set", "failed to marshal cache entry", err)
 	}
 
-	if err := cache.medium.Write(path, string(entryBytes)); err != nil {
+	if err := cache.medium.Write(path, entryJSON); err != nil {
 		_ = restoreFileSnapshot(cache.medium, snapshot)
 		return core.E("cache.set", "failed to write cache file", err)
 	}
@@ -393,7 +516,7 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 		ExpiresAt:   now.Add(ttl),
 	}
 
-	metaBytes, err := json.MarshalIndent(meta, "", "  ")
+	metaJSON, err := marshalPrettyJSON(meta)
 	if err != nil {
 		return core.E("cache.setBinary", "failed to marshal binary metadata", err)
 	}
@@ -404,7 +527,7 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 		return core.E("cache.setBinary", "failed to write binary payload", err)
 	}
 
-	if err := cache.medium.Write(jsonPath, string(metaBytes)); err != nil {
+	if err := cache.medium.Write(jsonPath, metaJSON); err != nil {
 		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
 		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
 		return core.E("cache.setBinary", "failed to write binary metadata", err)
@@ -1337,7 +1460,7 @@ func (httpCache *HTTPCache) readResponseRecord(key string) (*cachedResponseRecor
 		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to read cached response", err)
 	}
 
-	var envelope map[string]json.RawMessage
+	var envelope map[string]rawJSON
 	envelopeResult := core.JSONUnmarshalString(raw, &envelope)
 	if !envelopeResult.OK {
 		return nil, core.E("cache.HTTPCache.readResponseRecord", "failed to unmarshal cached response", envelopeResult.Value.(error))
@@ -1459,7 +1582,7 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 		Request:  req,
 		Response: resp,
 	}
-	meta, err := json.MarshalIndent(record, "", "  ")
+	meta, err := marshalPrettyJSON(record)
 	if err != nil {
 		return core.E("cache.HTTPCache.Put", "failed to marshal cached response", err)
 	}
@@ -1469,7 +1592,7 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
 		return core.E("cache.HTTPCache.Put", "failed to write cached response body", err)
 	}
-	if err := httpCache.medium.Write(metaPath, string(meta)); err != nil {
+	if err := httpCache.medium.Write(metaPath, meta); err != nil {
 		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
 		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
 		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
