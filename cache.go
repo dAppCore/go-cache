@@ -17,7 +17,6 @@ import (
 	// Note: AX-6 — no core equivalent for Lstat symlink checks or dynamic working directory lookup.
 	"os"
 	"slices"
-	"strings"
 	// Note: AX-6 — core.RWMutex is not available in the pinned core module.
 	"sync"
 	// Note: AX-6 — no core equivalent for durations or wall-clock timestamps.
@@ -97,7 +96,7 @@ func marshalPrettyJSON(value any) (string, error) {
 }
 
 func indentJSON(data []byte) string {
-	var builder strings.Builder
+	builder := core.NewBuilder()
 	indent := 0
 	inString := false
 	escaped := false
@@ -1167,7 +1166,7 @@ func (scopedCache *ScopedCache) Age(key string) time.Duration {
 }
 
 func scopePattern(prefix, pattern string) string {
-	pattern = strings.TrimPrefix(pattern, "/")
+	pattern = core.TrimPrefix(pattern, "/")
 	if pattern == "" {
 		return prefix
 	}
