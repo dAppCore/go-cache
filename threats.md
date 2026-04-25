@@ -68,8 +68,32 @@ Repro test: `TestCache_Path_PathTraversalSymlink_Bad`.
 
 Status: Complete
 
-Question: Did the class 1 or 2 audit expose overlapping eviction TOCTOU findings?
+### 3.1 Invalidate map walk / OnInvalidate registration
 
-Finding: No overlapping finding. The audit focus was untrusted-key DoS and path traversal per Mantis #923. Invalidation callback registration is protected by `Cache.mu`, and `Invalidate` copies the callback slice under an `RLock` before executing callbacks without holding the lock (`cache.go:666`, `cache.go:667`, `cache.go:679`, `cache.go:680`, `cache.go:681`). Entry deletion is idempotent with missing files ignored by the lower delete helpers (`cache.go:291`, `cache.go:301`, `cache.go:309`, `cache.go:692`, `cache.go:693`). Broader stale-read or concurrent Get/Invalidate semantics remain in sibling Mantis #924.
+Status: Complete
 
-Severity: Not assessed beyond overlap.
+Question: What lock is held while `Invalidate` walks callbacks, and can `OnInvalidate` append to the same trigger while that walk is in progress?
+
+Finding: No map-walk race found. `Cache.mu` is the lock protecting the invalidation callback map (`cache.go:50`). `OnInvalidate` takes the write lock before appending to `cache.invalidation[trigger]` (`cache.go:696`, `cache.go:698`). `Invalidate` takes the read lock only long enough to copy the trigger's callback slice, then releases the lock before executing callbacks and deleting entries (`cache.go:709`, `cache.go:710`, `cache.go:711`, `cache.go:713`). A callback that registers more invalidations therefore cannot mutate the map while it is being read. The newly registered callback is not included in the already-snapshotted invalidation pass, which is acceptable snapshot semantics. No `delete(c.invalidation, trigger)` call exists in the reviewed cache implementation.
+
+Severity: None.
+
+### 3.2 TTL expiry race on Get
+
+Status: Complete
+
+Question: Can two concurrent readers of a freshly expired entry return expired data, or does one reader delete/alter state out from under the other?
+
+Finding: No unsafe TTL expiry race found. `Get` reads the entry under the entry read lock, unmarshals the cache envelope, checks `time.Now().After(entry.ExpiresAt)`, and returns `found=false` before unmarshalling cached data into the caller's destination (`cache.go:178`, `cache.go:186`, `cache.go:195`, `cache.go:200`, `cache.go:201`, `cache.go:204`). `GetBinary` follows the same metadata-first expiry check and returns `found=false` before reading the payload body (`cache.go:439`, `cache.go:445`, `cache.go:446`, `cache.go:449`). Expired reads do not delete files, so two readers can both lose and safely return not-found; neither path returns expired data after observing the expiry check.
+
+Severity: None.
+
+### 3.3 Get-then-Set caller-site TOCTOU
+
+Status: Complete
+
+Question: If two consumers both observe `Get` as missing or expired and then both call `Set`, does `Cache.mu` serialize the writes, or is this just last-writer-wins cache behavior?
+
+Finding: Yes, fixed. `Cache.mu` protects invalidation callback registration and snapshotting, while `entryMu` now serializes cache entry I/O separately (`cache.go:50`, `cache.go:51`). `Get` and `GetBinary` take `entryMu.RLock` while reading entries (`cache.go:178`, `cache.go:423`). `Set` and `SetBinary` take `entryMu.Lock` across path resolution, rollback snapshot, and writes (`cache.go:238`, `cache.go:246`, `cache.go:279`, `cache.go:280`, `cache.go:360`, `cache.go:368`, `cache.go:401`, `cache.go:407`). Delete paths are also serialized: single-key removal locks before deleting metadata and binary sidecars, `DeleteMany` locks across its batch, and invalidation pattern listing takes the entry read lock while walking keys (`cache.go:306`, `cache.go:315`, `cache.go:323`, `cache.go:469`, `cache.go:486`, `cache.go:550`, `cache.go:553`). Pure cache freshness remains last-writer-wins, but callers no longer need the backing `coreio.Medium` to tolerate overlapping entry operations. Regression coverage: `TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites` (`cache_test.go:2668`).
+
+Severity: Medium before fix; mitigated by entry-level serialization.

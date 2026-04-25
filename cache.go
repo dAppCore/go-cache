@@ -48,6 +48,7 @@ type Cache struct {
 	cacheTTL     time.Duration
 	invalidation map[string][]InvalidateFunc
 	mu           sync.RWMutex
+	entryMu      sync.RWMutex
 }
 
 // Entry is the serialized cache record written to the backing Medium.
@@ -174,6 +175,9 @@ func (cache *Cache) Get(key string, dest any) (bool, error) {
 		return false, err
 	}
 
+	cache.entryMu.RLock()
+	defer cache.entryMu.RUnlock()
+
 	path, err := cache.Path(key)
 	if err != nil {
 		return false, err
@@ -230,6 +234,9 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 	if err := cache.ensureReady("cache.set"); err != nil {
 		return err
 	}
+
+	cache.entryMu.Lock()
+	defer cache.entryMu.Unlock()
 
 	path, _, err := cache.entryPaths(key)
 	if err != nil {
@@ -296,6 +303,9 @@ func (cache *Cache) removeEntryFiles(key string) (bool, error) {
 	if err := cache.ensureReady("cache.removeEntryFiles"); err != nil {
 		return false, err
 	}
+	cache.entryMu.Lock()
+	defer cache.entryMu.Unlock()
+
 	jsonPath, binaryPath, err := cache.entryPaths(key)
 	if err != nil {
 		return false, err
@@ -347,6 +357,9 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 	if err := cache.ensureReady("cache.setBinary"); err != nil {
 		return err
 	}
+	cache.entryMu.Lock()
+	defer cache.entryMu.Unlock()
+
 	jsonPath, binaryPath, err := cache.entryPaths(key)
 	if err != nil {
 		return err
@@ -407,6 +420,9 @@ func (cache *Cache) GetBinary(key string) ([]byte, bool, error) {
 	if err := cache.ensureReady("cache.GetBinary"); err != nil {
 		return nil, false, err
 	}
+	cache.entryMu.RLock()
+	defer cache.entryMu.RUnlock()
+
 	metaPath, binaryPath, err := cache.entryPaths(key)
 	if err != nil {
 		return nil, false, err
@@ -449,6 +465,9 @@ func (cache *Cache) DeleteMany(keys ...string) error {
 	if err := cache.ensureReady("cache.DeleteMany"); err != nil {
 		return err
 	}
+
+	cache.entryMu.Lock()
+	defer cache.entryMu.Unlock()
 
 	type entryFileSet struct {
 		jsonPath   string
@@ -527,6 +546,9 @@ func (cache *Cache) keysByPattern(pattern string) ([]string, error) {
 	if err := ensureSafePattern(pattern); err != nil {
 		return nil, err
 	}
+
+	cache.entryMu.RLock()
+	defer cache.entryMu.RUnlock()
 
 	allKeys, err := cache.listJSONKeys()
 	if err != nil {

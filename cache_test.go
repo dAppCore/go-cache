@@ -10,7 +10,9 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2661,4 +2663,78 @@ func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *test
 	if _, err := httpCache.ReadBody(&cache.CachedResponse{BodyPath: "../../escape"}); err == nil {
 		t.Fatal("expected ReadBody to reject traversal body path")
 	}
+}
+
+func TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites(t *testing.T) {
+	medium := &raceProbeMedium{MockMedium: coreio.NewMockMedium()}
+	c, err := cache.New(medium, "/tmp/cache-threat-toctou", time.Minute)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	const workers = 32
+	start := make(chan struct{})
+	writes := make(chan struct{})
+	errCh := make(chan string, workers*3)
+
+	var reads sync.WaitGroup
+	reads.Add(workers)
+	var done sync.WaitGroup
+	done.Add(workers)
+
+	for i := range workers {
+		go func(value int) {
+			defer done.Done()
+			<-start
+
+			var got map[string]int
+			found, err := c.Get("race/key", &got)
+			if err != nil {
+				errCh <- err.Error()
+			}
+			if found {
+				errCh <- "expected initial Get to miss"
+			}
+			reads.Done()
+
+			<-writes
+			if err := c.Set("race/key", map[string]int{"writer": value}); err != nil {
+				errCh <- err.Error()
+			}
+		}(i)
+	}
+
+	close(start)
+	reads.Wait()
+	close(writes)
+	done.Wait()
+	close(errCh)
+
+	for msg := range errCh {
+		t.Error(msg)
+	}
+
+	var got map[string]int
+	found, err := c.Get("race/key", &got)
+	if err != nil {
+		t.Fatalf("final Get failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected final cache entry to exist")
+	}
+	if medium.probedWrites == 0 {
+		t.Fatal("expected probe medium to observe writes")
+	}
+}
+
+type raceProbeMedium struct {
+	*coreio.MockMedium
+	probedWrites int
+}
+
+func (m *raceProbeMedium) Write(path, content string) error {
+	m.probedWrites++
+	runtime.Gosched()
+	m.probedWrites++
+	return m.MockMedium.Write(path, content)
 }
