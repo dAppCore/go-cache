@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
+	core "dappco.re/go"
 	"dappco.re/go/cache"
-	"dappco.re/go/core"
 	coreio "dappco.re/go/io"
 )
 

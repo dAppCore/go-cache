@@ -13,7 +13,7 @@ import (
 	// Note: AX-6 — no core equivalent for durations or wall-clock timestamps.
 	"time"
 
-	"dappco.re/go/core"
+	core "dappco.re/go"
 	coreio "dappco.re/go/io"
 )
 
@@ -391,7 +391,9 @@ func (cache *Cache) set(key string, data any, ttl time.Duration, useDefaultTTL b
 	}
 
 	if err := cache.medium.Write(path, entryJSON); err != nil {
-		_ = restoreFileSnapshot(cache.medium, snapshot)
+		if restoreErr := restoreFileSnapshot(cache.medium, snapshot); restoreErr != nil {
+			return core.E("cache.set", "failed to restore cache file after write failure", core.ErrorJoin(err, restoreErr))
+		}
 		return core.E("cache.set", "failed to write cache file", err)
 	}
 	return nil
@@ -515,14 +517,22 @@ func (cache *Cache) setBinary(key string, data []byte, contentType string, ttl t
 	}
 
 	if err := cache.medium.Write(binaryPath, string(data)); err != nil {
-		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
-		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
+		if restoreErr := restoreFileSnapshot(cache.medium, jsonSnapshot); restoreErr != nil {
+			return core.E("cache.setBinary", "failed to restore binary metadata after payload write failure", core.ErrorJoin(err, restoreErr))
+		}
+		if restoreErr := restoreFileSnapshot(cache.medium, binarySnapshot); restoreErr != nil {
+			return core.E("cache.setBinary", "failed to restore binary payload after payload write failure", core.ErrorJoin(err, restoreErr))
+		}
 		return core.E("cache.setBinary", "failed to write binary payload", err)
 	}
 
 	if err := cache.medium.Write(jsonPath, metaJSON); err != nil {
-		_ = restoreFileSnapshot(cache.medium, binarySnapshot)
-		_ = restoreFileSnapshot(cache.medium, jsonSnapshot)
+		if restoreErr := restoreFileSnapshot(cache.medium, binarySnapshot); restoreErr != nil {
+			return core.E("cache.setBinary", "failed to restore binary payload after metadata write failure", core.ErrorJoin(err, restoreErr))
+		}
+		if restoreErr := restoreFileSnapshot(cache.medium, jsonSnapshot); restoreErr != nil {
+			return core.E("cache.setBinary", "failed to restore binary metadata after metadata write failure", core.ErrorJoin(err, restoreErr))
+		}
 		return core.E("cache.setBinary", "failed to write binary metadata", err)
 	}
 
@@ -1686,13 +1696,21 @@ func (httpCache *HTTPCache) Put(req CachedRequest, resp CachedResponse, body []b
 	}
 
 	if err := httpCache.medium.Write(binaryPath, string(body)); err != nil {
-		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
-		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
+		if restoreErr := restoreFileSnapshot(httpCache.medium, metaSnapshot); restoreErr != nil {
+			return core.E("cache.HTTPCache.Put", "failed to restore response metadata after body write failure", core.ErrorJoin(err, restoreErr))
+		}
+		if restoreErr := restoreFileSnapshot(httpCache.medium, binarySnapshot); restoreErr != nil {
+			return core.E("cache.HTTPCache.Put", "failed to restore response body after body write failure", core.ErrorJoin(err, restoreErr))
+		}
 		return core.E("cache.HTTPCache.Put", "failed to write cached response body", err)
 	}
 	if err := httpCache.medium.Write(metaPath, meta); err != nil {
-		_ = restoreFileSnapshot(httpCache.medium, binarySnapshot)
-		_ = restoreFileSnapshot(httpCache.medium, metaSnapshot)
+		if restoreErr := restoreFileSnapshot(httpCache.medium, binarySnapshot); restoreErr != nil {
+			return core.E("cache.HTTPCache.Put", "failed to restore response body after metadata write failure", core.ErrorJoin(err, restoreErr))
+		}
+		if restoreErr := restoreFileSnapshot(httpCache.medium, metaSnapshot); restoreErr != nil {
+			return core.E("cache.HTTPCache.Put", "failed to restore response metadata after metadata write failure", core.ErrorJoin(err, restoreErr))
+		}
 		return core.E("cache.HTTPCache.Put", "failed to write cached response metadata", err)
 	}
 
