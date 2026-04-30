@@ -6,8 +6,7 @@
 package main
 
 import (
-	"os"
-
+	core "dappco.re/go"
 	"dappco.re/go/cache"
 	coreio "dappco.re/go/io"
 )
@@ -15,25 +14,26 @@ import (
 func main() {
 	medium := coreio.NewMockMedium()
 
-	c, err := cache.New(medium, "/cache", cache.DefaultTTL)
-	if err != nil {
-		os.Exit(1)
+	cacheResult := cache.New(medium, "/cache", cache.DefaultTTL)
+	if !cacheResult.OK {
+		core.Exit(1)
 	}
+	c := cacheResult.Value.(*cache.Cache)
 
 	payload := map[string]string{"hello": "world"}
-	if err := c.Set("driver/roundtrip", payload); err != nil {
-		os.Exit(2)
+	if r := c.Set("driver/roundtrip", payload); !r.OK {
+		core.Exit(2)
 	}
 
 	var out map[string]string
-	found, err := c.Get("driver/roundtrip", &out)
-	if err != nil {
-		os.Exit(3)
+	found := c.Get("driver/roundtrip", &out)
+	if !found.OK {
+		core.Exit(3)
 	}
-	if !found {
-		os.Exit(4)
+	if !found.Value.(bool) {
+		core.Exit(4)
 	}
 	if out["hello"] != "world" {
-		os.Exit(5)
+		core.Exit(5)
 	}
 }
