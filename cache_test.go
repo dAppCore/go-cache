@@ -26,6 +26,50 @@ import (
 	coreio "dappco.re/go/io"
 )
 
+const (
+	testSetFailed                = "Set failed: %v"
+	testPathFailed               = "Path failed: %v"
+	testNewCacheStorageFailed    = "NewCacheStorage failed: %v"
+	testOpenFailed               = "Open failed: %v"
+	testTraversalKey             = "../../etc/passwd"
+	testNewFailed                = "New failed: %v"
+	testCacheKey                 = "test-key"
+	testGetFailed                = "Get failed: %v"
+	testMalformedJSON            = "{not-json"
+	testMarshalFailed            = "Marshal failed: %v"
+	testTextPlain                = "text/plain"
+	testWantDeleteBackendFailure = "expected Delete to surface backend failure"
+	testAppOrigin                = "https://app.example.com"
+	testSetWithTTLFailed         = "SetWithTTL failed: %v"
+	testApplicationWasm          = "application/wasm"
+	testSetBinaryFailed          = "SetBinary failed: %v"
+	testGetBinaryFailed          = "GetBinary failed: %v"
+	testApplicationOctetStream   = "application/octet-stream"
+	testSetBinaryWithTTLFailed   = "SetBinaryWithTTL failed: %v"
+	testAdminOrigin              = "https://admin.example.com"
+	testAppUser                  = "app-user"
+	testUserProfileKey           = "user/profile"
+	testAppSetFailed             = "app Set failed: %v"
+	testAdminUser                = "admin-user"
+	testAdminSetFailed           = "admin Set failed: %v"
+	testConfigThemeKey           = "config/theme"
+	testInvalidateFailed         = "Invalidate failed: %v"
+	testDNSExampleAKey           = "dns/example.com/A"
+	testDNSTreeRootChanged       = "dns.tree-root-changed"
+	testDNSChanged               = "dns.changed"
+	testHTTPCacheName            = "my-app-v1"
+	testStorageOpenFailed        = "storage.Open failed: %v"
+	testStyleURL                 = "https://example.com/style.css"
+	testHeaderContentType        = "Content-Type"
+	testTextCSS                  = "text/css"
+	testPutFailed                = "Put failed: %v"
+	testMatchFailed              = "Match failed: %v"
+	testResponsesPrefix          = "responses/"
+	testExampleAURL              = "https://example.com/a"
+	testRaceMixedKey             = "race/mixed"
+	testRaceKey                  = "race/key"
+)
+
 type scriptedMedium struct {
 	*coreio.MockMedium
 	readErr      map[string]error
@@ -159,12 +203,12 @@ func TestCache_New_Good(t *testing.T) {
 
 	const key = "defaults"
 	if err := c.Set(key, map[string]string{"foo": "bar"}); err != nil {
-		t.Fatalf("Set failed: %v", err)
+		t.Fatalf(testSetFailed, err)
 	}
 
 	path, err := c.Path(key)
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 
 	wantPath := core.JoinPath(tmpDir, ".core", "cache", key+".json")
@@ -211,12 +255,12 @@ func TestCache_NewCacheStorage_Good(t *testing.T) {
 
 	storage, err := cache.NewCacheStorage(nil, "")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("assets-v1")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 	if httpCache == nil {
 		t.Fatal("expected Open to return a cache")
@@ -244,7 +288,9 @@ func TestCache_NewCacheStorage_Bad(t *testing.T) {
 func TestCache_SetWithTTL_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-setwithttl-bad", time.Minute)
 
-	if err := c.SetWithTTL("session/bad", map[string]any{"handler": func() {}}, -time.Second); err == nil {
+	if err := c.SetWithTTL("session/bad", map[string]any{"handler": func() {
+		// Intentionally empty: JSON marshaling rejects function values before invocation.
+	}}, -time.Second); err == nil {
 		t.Fatal("expected SetWithTTL to reject negative ttl")
 	}
 }
@@ -252,7 +298,9 @@ func TestCache_SetWithTTL_Bad(t *testing.T) {
 func TestCache_SetWithTTL_Ugly(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-setwithttl-ugly", time.Minute)
 
-	if err := c.SetWithTTL("session/ugly", map[string]any{"handler": func() {}}, time.Second); err == nil {
+	if err := c.SetWithTTL("session/ugly", map[string]any{"handler": func() {
+		// Intentionally empty: JSON marshaling rejects function values before invocation.
+	}}, time.Second); err == nil {
 		t.Fatal("expected SetWithTTL to reject unsupported JSON payload")
 	}
 }
@@ -262,7 +310,7 @@ func TestCache_Path_Good(t *testing.T) {
 
 	path, err := c.Path("github/acme/repos")
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 
 	want := "/tmp/cache-path/github/acme/repos.json"
@@ -279,7 +327,7 @@ func TestCache_Path_Bad(t *testing.T) {
 		key  string
 	}{
 		{name: "empty", key: ""},
-		{name: "traversal", key: "../../etc/passwd"},
+		{name: "traversal", key: testTraversalKey},
 		{name: "dot", key: "."},
 		{name: "backslash", key: `foo\bar`},
 		{name: "null-byte", key: "foo\x00bar"},
@@ -313,7 +361,7 @@ func TestCache_Path_PathTraversalSymlink_Bad(t *testing.T) {
 
 	c, err := cache.New(coreio.Local, baseDir, time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	if _, err := c.Path("link/escaped"); err == nil {
@@ -332,17 +380,17 @@ func TestCache_Path_PathTraversalSymlink_Bad(t *testing.T) {
 func TestCache_Get_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache", time.Minute)
 
-	key := "test-key"
+	key := testCacheKey
 	data := map[string]string{"foo": "bar"}
 
 	if err := c.Set(key, data); err != nil {
-		t.Fatalf("Set failed: %v", err)
+		t.Fatalf(testSetFailed, err)
 	}
 
 	var retrieved map[string]string
 	found, err := c.Get(key, &retrieved)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if !found {
 		t.Fatal("expected to find cached item")
@@ -355,14 +403,14 @@ func TestCache_Get_Good(t *testing.T) {
 func TestCache_Get_Ugly(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-expiry", 10*time.Millisecond)
 
-	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
+	if err := c.Set(testCacheKey, map[string]string{"foo": "bar"}); err != nil {
 		t.Fatalf("Set for expiry test failed: %v", err)
 	}
 
 	time.Sleep(50 * time.Millisecond)
 
 	var retrieved map[string]string
-	found, err := c.Get("test-key", &retrieved)
+	found, err := c.Get(testCacheKey, &retrieved)
 	if err != nil {
 		t.Fatalf("Get for expired item returned an unexpected error: %v", err)
 	}
@@ -376,9 +424,9 @@ func TestCache_Get_Bad(t *testing.T) {
 
 	path, err := c.Path("corrupt")
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
-	m.Files[path] = "{not-json"
+	m.Files[path] = testMalformedJSON
 
 	var dest map[string]string
 	found, err := c.Get("corrupt", &dest)
@@ -395,7 +443,7 @@ func TestCache_Get_Ugly_MalformedCachedPayload(t *testing.T) {
 
 	path, err := c.Path("bad-data")
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 
 	entry := cache.Entry{
@@ -405,7 +453,7 @@ func TestCache_Get_Ugly_MalformedCachedPayload(t *testing.T) {
 	}
 	raw, err := json.Marshal(entry)
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf(testMarshalFailed, err)
 	}
 	m.Files[path] = string(raw)
 
@@ -422,11 +470,11 @@ func TestCache_Get_Ugly_MalformedCachedPayload(t *testing.T) {
 func TestCache_Age_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-age", time.Minute)
 
-	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
-		t.Fatalf("Set failed: %v", err)
+	if err := c.Set(testCacheKey, map[string]string{"foo": "bar"}); err != nil {
+		t.Fatalf(testSetFailed, err)
 	}
 
-	if age := c.Age("test-key"); age < 0 {
+	if age := c.Age(testCacheKey); age < 0 {
 		t.Errorf("expected age >= 0, got %v", age)
 	}
 }
@@ -440,9 +488,9 @@ func TestCache_Age_Bad(t *testing.T) {
 
 	path, err := c.Path("invalid")
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
-	m.Files[path] = "{not-json"
+	m.Files[path] = testMalformedJSON
 
 	if age := c.Age("invalid"); age != -1 {
 		t.Fatalf("expected Age to return -1 for malformed entry, got %v", age)
@@ -467,10 +515,10 @@ func TestCache_NilReceiver_Good(t *testing.T) {
 	if err := c.SetWithTTL("x", map[string]string{"foo": "bar"}, time.Second); err == nil {
 		t.Fatal("expected SetWithTTL to fail on nil receiver")
 	}
-	if err := c.SetBinary("x", []byte("body"), "text/plain"); err == nil {
+	if err := c.SetBinary("x", []byte("body"), testTextPlain); err == nil {
 		t.Fatal("expected SetBinary to fail on nil receiver")
 	}
-	if err := c.SetBinaryWithTTL("x", []byte("body"), "text/plain", time.Second); err == nil {
+	if err := c.SetBinaryWithTTL("x", []byte("body"), testTextPlain, time.Second); err == nil {
 		t.Fatal("expected SetBinaryWithTTL to fail on nil receiver")
 	}
 
@@ -505,10 +553,10 @@ func TestCache_ZeroValue_Ugly(t *testing.T) {
 	if err := c.SetWithTTL("x", map[string]string{"foo": "bar"}, time.Second); err == nil {
 		t.Fatal("expected SetWithTTL to fail on zero-value cache")
 	}
-	if err := c.SetBinary("x", []byte("body"), "text/plain"); err == nil {
+	if err := c.SetBinary("x", []byte("body"), testTextPlain); err == nil {
 		t.Fatal("expected SetBinary to fail on zero-value cache")
 	}
-	if err := c.SetBinaryWithTTL("x", []byte("body"), "text/plain", time.Second); err == nil {
+	if err := c.SetBinaryWithTTL("x", []byte("body"), testTextPlain, time.Second); err == nil {
 		t.Fatal("expected SetBinaryWithTTL to fail on zero-value cache")
 	}
 
@@ -528,16 +576,16 @@ func TestCache_ZeroValue_Ugly(t *testing.T) {
 func TestCache_Delete_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-delete", time.Minute)
 
-	if err := c.Set("test-key", map[string]string{"foo": "bar"}); err != nil {
-		t.Fatalf("Set failed: %v", err)
+	if err := c.Set(testCacheKey, map[string]string{"foo": "bar"}); err != nil {
+		t.Fatalf(testSetFailed, err)
 	}
 
-	if err := c.Delete("test-key"); err != nil {
+	if err := c.Delete(testCacheKey); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
 	var retrieved map[string]string
-	found, err := c.Get("test-key", &retrieved)
+	found, err := c.Get(testCacheKey, &retrieved)
 	if err != nil {
 		t.Fatalf("Get after delete returned an unexpected error: %v", err)
 	}
@@ -549,7 +597,7 @@ func TestCache_Delete_Good(t *testing.T) {
 func TestCache_Delete_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-delete-bad", time.Minute)
 
-	if err := c.Delete("../../etc/passwd"); err == nil {
+	if err := c.Delete(testTraversalKey); err == nil {
 		t.Fatal("expected Delete to reject traversal key")
 	}
 }
@@ -558,18 +606,18 @@ func TestCache_Delete_Bad_BackendFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	c, err := cache.New(medium, "/tmp/cache-delete-backend-bad", time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	key := "delete/backend"
 	path, err := c.Path(key)
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 	medium.deleteErr[path] = core.E("cache_test", "boom", nil)
 
 	if err := c.Delete(key); err == nil {
-		t.Fatal("expected Delete to surface backend failure")
+		t.Fatal(testWantDeleteBackendFailure)
 	}
 }
 
@@ -623,7 +671,7 @@ func TestCache_DeleteMany_RejectsTraversalBeforeDeletingAnything(t *testing.T) {
 		t.Fatalf("Set failed for key2: %v", err)
 	}
 
-	if err := c.DeleteMany("key1", "../../etc/passwd", "key2"); err == nil {
+	if err := c.DeleteMany("key1", testTraversalKey, "key2"); err == nil {
 		t.Fatal("expected DeleteMany to reject traversal key")
 	}
 
@@ -673,7 +721,7 @@ func TestCache_Clear_Bad(t *testing.T) {
 	medium := newScriptedMedium()
 	c, err := cache.New(medium, "/tmp/cache-clear-bad", time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	medium.deleteAllErr["/tmp/cache-clear-bad"] = core.E("cache_test", "boom", nil)
@@ -687,12 +735,12 @@ func TestCache_ClearScope_Bad_ListFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	c, err := cache.New(medium, "/tmp/cache-clear-scope-bad", time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	medium.listErr["/tmp/cache-clear-scope-bad"] = core.E("cache_test", "boom", nil)
 
-	if err := c.ClearScope("https://app.example.com"); err == nil {
+	if err := c.ClearScope(testAppOrigin); err == nil {
 		t.Fatal("expected ClearScope to surface backend list failure")
 	}
 }
@@ -731,7 +779,7 @@ func TestCache_SetWithTTL_Good(t *testing.T) {
 	key := "session/short"
 	err := c.SetWithTTL(key, map[string]string{"token": "abc"}, 20*time.Millisecond)
 	if err != nil {
-		t.Fatalf("SetWithTTL failed: %v", err)
+		t.Fatalf(testSetWithTTLFailed, err)
 	}
 
 	var dest map[string]string
@@ -761,7 +809,7 @@ func TestCache_SetWithTTL_ZeroExpiresImmediately(t *testing.T) {
 
 	key := "session/instant"
 	if err := c.SetWithTTL(key, map[string]string{"token": "abc"}, 0); err != nil {
-		t.Fatalf("SetWithTTL failed: %v", err)
+		t.Fatalf(testSetWithTTLFailed, err)
 	}
 
 	var dest map[string]string
@@ -777,7 +825,9 @@ func TestCache_SetWithTTL_ZeroExpiresImmediately(t *testing.T) {
 func TestCache_Set_Ugly(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-set-ugly", time.Minute)
 
-	if err := c.Set("bad", func() {}); err == nil {
+	if err := c.Set("bad", func() {
+		// Intentionally empty: JSON marshaling rejects function values before invocation.
+	}); err == nil {
 		t.Fatal("expected Set to reject unsupported JSON payload")
 	}
 }
@@ -786,14 +836,14 @@ func TestCache_Binary_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary", 10*time.Minute)
 
 	blob := []byte{0x00, 0x01, 0x02, 0x03}
-	err := c.SetBinary("wasm/my-module", blob, "application/wasm")
+	err := c.SetBinary("wasm/my-module", blob, testApplicationWasm)
 	if err != nil {
-		t.Fatalf("SetBinary failed: %v", err)
+		t.Fatalf(testSetBinaryFailed, err)
 	}
 
 	data, found, err := c.GetBinary("wasm/my-module")
 	if err != nil {
-		t.Fatalf("GetBinary failed: %v", err)
+		t.Fatalf(testGetBinaryFailed, err)
 	}
 	if !found {
 		t.Fatalf("expected binary data")
@@ -806,7 +856,7 @@ func TestCache_Binary_Good(t *testing.T) {
 func TestCache_SetBinary_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary-bad", 10*time.Minute)
 
-	if err := c.SetBinaryWithTTL("../../etc/passwd", []byte("blob"), "text/plain", time.Second); err == nil {
+	if err := c.SetBinaryWithTTL(testTraversalKey, []byte("blob"), testTextPlain, time.Second); err == nil {
 		t.Fatal("expected SetBinaryWithTTL to reject traversal key")
 	}
 }
@@ -814,7 +864,7 @@ func TestCache_SetBinary_Bad(t *testing.T) {
 func TestCache_SetBinaryWithTTL_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary-negative-ttl", 10*time.Minute)
 
-	if err := c.SetBinaryWithTTL("wasm/negative-ttl", []byte("blob"), "application/wasm", -time.Second); err == nil {
+	if err := c.SetBinaryWithTTL("wasm/negative-ttl", []byte("blob"), testApplicationWasm, -time.Second); err == nil {
 		t.Fatal("expected SetBinaryWithTTL to reject negative ttl")
 	}
 }
@@ -824,8 +874,8 @@ func TestCache_SetBinaryWithTTL_Good(t *testing.T) {
 
 	key := "wasm/ttl"
 	blob := []byte("temporary-binary")
-	if err := c.SetBinaryWithTTL(key, blob, "application/octet-stream", 20*time.Millisecond); err != nil {
-		t.Fatalf("SetBinaryWithTTL failed: %v", err)
+	if err := c.SetBinaryWithTTL(key, blob, testApplicationOctetStream, 20*time.Millisecond); err != nil {
+		t.Fatalf(testSetBinaryWithTTLFailed, err)
 	}
 
 	data, found, err := c.GetBinary(key)
@@ -853,18 +903,18 @@ func TestCache_SetBinary_Ugly(t *testing.T) {
 	medium := newScriptedMedium()
 	c, err := cache.New(medium, "/tmp/cache-binary-ugly", time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	key := "wasm/ugly"
 	jsonPath, err := c.Path(key)
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 	binPath := core.TrimSuffix(jsonPath, ".json") + ".bin"
 	medium.writeErr[jsonPath] = core.E("cache_test", "metadata boom", nil)
 
-	if err := c.SetBinary(key, []byte("body"), "application/wasm"); err == nil {
+	if err := c.SetBinary(key, []byte("body"), testApplicationWasm); err == nil {
 		t.Fatal("expected SetBinary to surface metadata write failure")
 	}
 	if _, ok := medium.Files[binPath]; ok {
@@ -876,18 +926,18 @@ func TestCache_SetBinary_Ugly_BinaryWriteFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	c, err := cache.New(medium, "/tmp/cache-binary-write-failure", time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	key := "wasm/write-failure"
 	jsonPath, err := c.Path(key)
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 	binPath := core.TrimSuffix(jsonPath, ".json") + ".bin"
 	medium.writeErr[binPath] = core.E("cache_test", "payload boom", nil)
 
-	if err := c.SetBinary(key, []byte("body"), "application/wasm"); err == nil {
+	if err := c.SetBinary(key, []byte("body"), testApplicationWasm); err == nil {
 		t.Fatal("expected SetBinary to surface binary write failure")
 	}
 	if _, ok := medium.Files[jsonPath]; ok {
@@ -902,13 +952,13 @@ func TestCache_Binary_RoundTripArbitraryBytes(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary-arbitrary", 10*time.Minute)
 
 	blob := []byte{0x00, 0x7f, 0x80, 0xff, 0x1b}
-	if err := c.SetBinary("wasm/opaque", blob, "application/octet-stream"); err != nil {
-		t.Fatalf("SetBinary failed: %v", err)
+	if err := c.SetBinary("wasm/opaque", blob, testApplicationOctetStream); err != nil {
+		t.Fatalf(testSetBinaryFailed, err)
 	}
 
 	data, found, err := c.GetBinary("wasm/opaque")
 	if err != nil {
-		t.Fatalf("GetBinary failed: %v", err)
+		t.Fatalf(testGetBinaryFailed, err)
 	}
 	if !found {
 		t.Fatalf("expected binary data")
@@ -927,14 +977,14 @@ func TestCache_Binary_WithTTL_Expires(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary-expiry", 10*time.Minute)
 
 	blob := []byte("temporary")
-	if err := c.SetBinaryWithTTL("temp/nonce", blob, "text/plain", 10*time.Millisecond); err != nil {
-		t.Fatalf("SetBinaryWithTTL failed: %v", err)
+	if err := c.SetBinaryWithTTL("temp/nonce", blob, testTextPlain, 10*time.Millisecond); err != nil {
+		t.Fatalf(testSetBinaryWithTTLFailed, err)
 	}
 
 	time.Sleep(25 * time.Millisecond)
 	_, found, err := c.GetBinary("temp/nonce")
 	if err != nil {
-		t.Fatalf("GetBinary failed: %v", err)
+		t.Fatalf(testGetBinaryFailed, err)
 	}
 	if found {
 		t.Fatalf("expected binary item to expire")
@@ -945,8 +995,8 @@ func TestCache_Binary_WithTTL_ZeroExpiresImmediately(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-binary-zero-expiry", 10*time.Minute)
 
 	blob := []byte("instant")
-	if err := c.SetBinaryWithTTL("temp/instant", blob, "text/plain", 0); err != nil {
-		t.Fatalf("SetBinaryWithTTL failed: %v", err)
+	if err := c.SetBinaryWithTTL("temp/instant", blob, testTextPlain, 0); err != nil {
+		t.Fatalf(testSetBinaryWithTTLFailed, err)
 	}
 
 	_, found, err := c.GetBinary("temp/instant")
@@ -968,9 +1018,9 @@ func TestCache_GetBinary_Bad(t *testing.T) {
 	key := "bad/meta"
 	metaPath, err := c.Path(key)
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
-	m.Files[metaPath] = "{not-json"
+	m.Files[metaPath] = testMalformedJSON
 
 	if _, found, err := c.GetBinary(key); err == nil || found {
 		t.Fatalf("expected malformed binary metadata to fail, found=%v err=%v", found, err)
@@ -981,13 +1031,13 @@ func TestCache_GetBinary_Bad_MissingPayload(t *testing.T) {
 	c, m := newTestCache(t, "/tmp/cache-get-binary-missing-payload", time.Minute)
 
 	key := "blob/missing"
-	if err := c.SetBinary(key, []byte("payload"), "application/octet-stream"); err != nil {
-		t.Fatalf("SetBinary failed: %v", err)
+	if err := c.SetBinary(key, []byte("payload"), testApplicationOctetStream); err != nil {
+		t.Fatalf(testSetBinaryFailed, err)
 	}
 
 	jsonPath, err := c.Path(key)
 	if err != nil {
-		t.Fatalf("Path failed: %v", err)
+		t.Fatalf(testPathFailed, err)
 	}
 	binPath := core.TrimSuffix(jsonPath, ".json") + ".bin"
 	delete(m.Files, binPath)
@@ -1000,15 +1050,15 @@ func TestCache_GetBinary_Bad_MissingPayload(t *testing.T) {
 func TestCache_PublicMethods_RejectTraversalKeys(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-traversal-coverage", time.Minute)
 
-	if err := c.SetWithTTL("../../etc/passwd", "value", time.Second); err == nil {
+	if err := c.SetWithTTL(testTraversalKey, "value", time.Second); err == nil {
 		t.Fatal("expected SetWithTTL to reject traversal key")
 	}
 
-	if err := c.SetBinary("../../etc/passwd", []byte("blob"), "text/plain"); err == nil {
+	if err := c.SetBinary(testTraversalKey, []byte("blob"), testTextPlain); err == nil {
 		t.Fatal("expected SetBinary to reject traversal key")
 	}
 
-	if _, found, err := c.GetBinary("../../etc/passwd"); err == nil || found {
+	if _, found, err := c.GetBinary(testTraversalKey); err == nil || found {
 		t.Fatalf("expected GetBinary to reject traversal key, found=%v err=%v", found, err)
 	}
 }
@@ -1016,38 +1066,38 @@ func TestCache_PublicMethods_RejectTraversalKeys(t *testing.T) {
 func TestCache_Scoped_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped", time.Minute)
 
-	app := c.Scoped("https://app.example.com")
-	admin := c.Scoped("https://admin.example.com")
+	app := c.Scoped(testAppOrigin)
+	admin := c.Scoped(testAdminOrigin)
 
-	if err := app.Set("user/profile", "app-user"); err != nil {
-		t.Fatalf("app Set failed: %v", err)
+	if err := app.Set(testUserProfileKey, testAppUser); err != nil {
+		t.Fatalf(testAppSetFailed, err)
 	}
-	if err := admin.Set("user/profile", "admin-user"); err != nil {
-		t.Fatalf("admin Set failed: %v", err)
+	if err := admin.Set(testUserProfileKey, testAdminUser); err != nil {
+		t.Fatalf(testAdminSetFailed, err)
 	}
 
 	var appVal string
 	var adminVal string
 
-	found, err := app.Get("user/profile", &appVal)
-	if err != nil || !found || appVal != "app-user" {
+	found, err := app.Get(testUserProfileKey, &appVal)
+	if err != nil || !found || appVal != testAppUser {
 		t.Fatalf("unexpected app scoped value: found=%v val=%q err=%v", found, appVal, err)
 	}
 
-	found, err = admin.Get("user/profile", &adminVal)
-	if err != nil || !found || adminVal != "admin-user" {
+	found, err = admin.Get(testUserProfileKey, &adminVal)
+	if err != nil || !found || adminVal != testAdminUser {
 		t.Fatalf("unexpected admin scoped value: found=%v val=%q err=%v", found, adminVal, err)
 	}
 
-	if err := c.ClearScope("https://app.example.com"); err != nil {
+	if err := c.ClearScope(testAppOrigin); err != nil {
 		t.Fatalf("ClearScope failed: %v", err)
 	}
 
-	found, err = app.Get("user/profile", &appVal)
+	found, err = app.Get(testUserProfileKey, &appVal)
 	if err != nil || found {
 		t.Fatalf("expected app scope to be cleared, found=%v err=%v", found, err)
 	}
-	found, err = admin.Get("user/profile", &adminVal)
+	found, err = admin.Get(testUserProfileKey, &adminVal)
 	if err != nil || !found {
 		t.Fatalf("expected admin scope to remain, found=%v err=%v", found, err)
 	}
@@ -1056,30 +1106,30 @@ func TestCache_Scoped_Good(t *testing.T) {
 func TestCache_Scoped_ClearScope_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped-clear-scope", time.Minute)
 
-	app := c.Scoped("https://app.example.com")
-	admin := c.Scoped("https://admin.example.com")
+	app := c.Scoped(testAppOrigin)
+	admin := c.Scoped(testAdminOrigin)
 
-	if err := app.Set("user/profile", "app-user"); err != nil {
-		t.Fatalf("app Set failed: %v", err)
+	if err := app.Set(testUserProfileKey, testAppUser); err != nil {
+		t.Fatalf(testAppSetFailed, err)
 	}
-	if err := admin.Set("user/profile", "admin-user"); err != nil {
-		t.Fatalf("admin Set failed: %v", err)
+	if err := admin.Set(testUserProfileKey, testAdminUser); err != nil {
+		t.Fatalf(testAdminSetFailed, err)
 	}
 
-	if err := app.ClearScope("https://app.example.com"); err != nil {
+	if err := app.ClearScope(testAppOrigin); err != nil {
 		t.Fatalf("scoped ClearScope failed: %v", err)
 	}
 
 	var appVal string
 	var adminVal string
 
-	found, err := app.Get("user/profile", &appVal)
+	found, err := app.Get(testUserProfileKey, &appVal)
 	if err != nil || found {
 		t.Fatalf("expected app scope to be cleared, found=%v err=%v", found, err)
 	}
 
-	found, err = admin.Get("user/profile", &adminVal)
-	if err != nil || !found || adminVal != "admin-user" {
+	found, err = admin.Get(testUserProfileKey, &adminVal)
+	if err != nil || !found || adminVal != testAdminUser {
 		t.Fatalf("expected admin scope to remain, found=%v val=%q err=%v", found, adminVal, err)
 	}
 }
@@ -1087,14 +1137,14 @@ func TestCache_Scoped_ClearScope_Good(t *testing.T) {
 func TestCache_Scoped_OnInvalidate_ScopesReturnedPatterns(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped-invalidate", time.Minute)
 
-	app := c.Scoped("https://app.example.com")
-	admin := c.Scoped("https://admin.example.com")
+	app := c.Scoped(testAppOrigin)
+	admin := c.Scoped(testAdminOrigin)
 
-	if err := app.Set("config/theme", "app-dark"); err != nil {
-		t.Fatalf("app Set failed: %v", err)
+	if err := app.Set(testConfigThemeKey, "app-dark"); err != nil {
+		t.Fatalf(testAppSetFailed, err)
 	}
-	if err := admin.Set("config/theme", "admin-dark"); err != nil {
-		t.Fatalf("admin Set failed: %v", err)
+	if err := admin.Set(testConfigThemeKey, "admin-dark"); err != nil {
+		t.Fatalf(testAdminSetFailed, err)
 	}
 
 	app.OnInvalidate("config.changed", func(trigger string) []string {
@@ -1103,7 +1153,7 @@ func TestCache_Scoped_OnInvalidate_ScopesReturnedPatterns(t *testing.T) {
 
 	deleted, err := app.Invalidate("config.changed")
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted != 1 {
 		t.Fatalf("expected one scoped entry to be deleted, got %d", deleted)
@@ -1112,7 +1162,7 @@ func TestCache_Scoped_OnInvalidate_ScopesReturnedPatterns(t *testing.T) {
 	var appVal string
 	var adminVal string
 
-	found, err := app.Get("config/theme", &appVal)
+	found, err := app.Get(testConfigThemeKey, &appVal)
 	if err != nil {
 		t.Fatalf("app Get failed: %v", err)
 	}
@@ -1120,7 +1170,7 @@ func TestCache_Scoped_OnInvalidate_ScopesReturnedPatterns(t *testing.T) {
 		t.Fatalf("expected app scoped config to be deleted")
 	}
 
-	found, err = admin.Get("config/theme", &adminVal)
+	found, err = admin.Get(testConfigThemeKey, &adminVal)
 	if err != nil {
 		t.Fatalf("admin Get failed: %v", err)
 	}
@@ -1132,29 +1182,29 @@ func TestCache_Scoped_OnInvalidate_ScopesReturnedPatterns(t *testing.T) {
 func TestCache_Invalidate_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate", time.Minute)
 
-	if err := c.Set("dns/example.com/A", map[string]string{"a": "1"}); err != nil {
+	if err := c.Set(testDNSExampleAKey, map[string]string{"a": "1"}); err != nil {
 		t.Fatalf("Set dns entry failed: %v", err)
 	}
 	if err := c.Set("dns/example.com/sub/path", map[string]string{"a": "2"}); err != nil {
 		t.Fatalf("Set nested dns entry failed: %v", err)
 	}
-	if err := c.Set("config/theme", "dark"); err != nil {
+	if err := c.Set(testConfigThemeKey, "dark"); err != nil {
 		t.Fatalf("Set config entry failed: %v", err)
 	}
 
-	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
+	c.OnInvalidate(testDNSTreeRootChanged, func(trigger string) []string {
 		return []string{"dns/*"}
 	})
-	deleted, err := c.Invalidate("dns.tree-root-changed")
+	deleted, err := c.Invalidate(testDNSTreeRootChanged)
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted == 0 {
 		t.Fatal("expected at least one deleted entry")
 	}
 
 	var dnsValue map[string]string
-	found, err := c.Get("dns/example.com/A", &dnsValue)
+	found, err := c.Get(testDNSExampleAKey, &dnsValue)
 	if err != nil {
 		t.Fatalf("Get after invalidation failed: %v", err)
 	}
@@ -1169,7 +1219,7 @@ func TestCache_Invalidate_Good(t *testing.T) {
 		t.Fatal("expected nested dns entry to be deleted")
 	}
 	var theme string
-	found, err = c.Get("config/theme", &theme)
+	found, err = c.Get(testConfigThemeKey, &theme)
 	if err != nil || !found {
 		t.Fatalf("expected config entry to remain, found=%v err=%v", found, err)
 	}
@@ -1178,15 +1228,15 @@ func TestCache_Invalidate_Good(t *testing.T) {
 func TestCache_Invalidate_UntrustedPatternLength_Bad(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate-pattern-length", time.Minute)
 
-	if err := c.Set("dns/example.com/A", "record"); err != nil {
-		t.Fatalf("Set failed: %v", err)
+	if err := c.Set(testDNSExampleAKey, "record"); err != nil {
+		t.Fatalf(testSetFailed, err)
 	}
 
-	c.OnInvalidate("dns.changed", func(trigger string) []string {
+	c.OnInvalidate(testDNSChanged, func(trigger string) []string {
 		return []string{repeatString("a", 4097)}
 	})
 
-	deleted, err := c.Invalidate("dns.changed")
+	deleted, err := c.Invalidate(testDNSChanged)
 	if err == nil {
 		t.Fatal("expected Invalidate to reject an oversized pattern")
 	}
@@ -1195,9 +1245,9 @@ func TestCache_Invalidate_UntrustedPatternLength_Bad(t *testing.T) {
 	}
 
 	var record string
-	found, err := c.Get("dns/example.com/A", &record)
+	found, err := c.Get(testDNSExampleAKey, &record)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if !found || record != "record" {
 		t.Fatalf("expected entry to remain, found=%v record=%q", found, record)
@@ -1210,16 +1260,16 @@ func TestCache_Invalidate_PrefixWildcardDoesNotMatchBarePrefix(t *testing.T) {
 	if err := c.Set("dns", "root"); err != nil {
 		t.Fatalf("Set bare prefix failed: %v", err)
 	}
-	if err := c.Set("dns/example.com/A", "record"); err != nil {
+	if err := c.Set(testDNSExampleAKey, "record"); err != nil {
 		t.Fatalf("Set nested dns entry failed: %v", err)
 	}
 
-	c.OnInvalidate("dns.tree-root-changed", func(trigger string) []string {
+	c.OnInvalidate(testDNSTreeRootChanged, func(trigger string) []string {
 		return []string{"dns/*"}
 	})
-	deleted, err := c.Invalidate("dns.tree-root-changed")
+	deleted, err := c.Invalidate(testDNSTreeRootChanged)
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted != 1 {
 		t.Fatalf("expected one descendant to be deleted, got %d", deleted)
@@ -1235,7 +1285,7 @@ func TestCache_Invalidate_PrefixWildcardDoesNotMatchBarePrefix(t *testing.T) {
 	}
 
 	var record string
-	found, err = c.Get("dns/example.com/A", &record)
+	found, err = c.Get(testDNSExampleAKey, &record)
 	if err != nil {
 		t.Fatalf("Get nested entry failed: %v", err)
 	}
@@ -1248,22 +1298,22 @@ func TestCache_Invalidate_SingleSegmentWildcard_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate-segment", time.Minute)
 
 	if err := c.Set("dns/charon.lthn", "one"); err != nil {
-		t.Fatalf("Set failed: %v", err)
+		t.Fatalf(testSetFailed, err)
 	}
 	if err := c.Set("dns/charon.local", "two"); err != nil {
-		t.Fatalf("Set failed: %v", err)
+		t.Fatalf(testSetFailed, err)
 	}
 	if err := c.Set("dns/other.local", "three"); err != nil {
-		t.Fatalf("Set failed: %v", err)
+		t.Fatalf(testSetFailed, err)
 	}
 
-	c.OnInvalidate("dns.changed", func(trigger string) []string {
+	c.OnInvalidate(testDNSChanged, func(trigger string) []string {
 		return []string{"dns/charon.*"}
 	})
 
-	deleted, err := c.Invalidate("dns.changed")
+	deleted, err := c.Invalidate(testDNSChanged)
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted != 2 {
 		t.Fatalf("expected two wildcard matches to be deleted, got %d", deleted)
@@ -1272,21 +1322,21 @@ func TestCache_Invalidate_SingleSegmentWildcard_Good(t *testing.T) {
 	var value string
 	found, err := c.Get("dns/charon.lthn", &value)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if found {
 		t.Fatal("expected charon.lthn to be deleted")
 	}
 	found, err = c.Get("dns/charon.local", &value)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if found {
 		t.Fatal("expected charon.local to be deleted")
 	}
 	found, err = c.Get("dns/other.local", &value)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if !found {
 		t.Fatal("expected unrelated entry to remain")
@@ -1296,23 +1346,23 @@ func TestCache_Invalidate_SingleSegmentWildcard_Good(t *testing.T) {
 func TestCache_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-invalidate-nil", time.Minute)
 
-	if err := c.Set("dns/example.com/A", "record"); err != nil {
-		t.Fatalf("Set failed: %v", err)
+	if err := c.Set(testDNSExampleAKey, "record"); err != nil {
+		t.Fatalf(testSetFailed, err)
 	}
 
-	c.OnInvalidate("dns.tree-root-changed", nil)
-	deleted, err := c.Invalidate("dns.tree-root-changed")
+	c.OnInvalidate(testDNSTreeRootChanged, nil)
+	deleted, err := c.Invalidate(testDNSTreeRootChanged)
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted != 0 {
 		t.Fatalf("expected nil callback to be ignored, got %d deletions", deleted)
 	}
 
 	var record string
-	found, err := c.Get("dns/example.com/A", &record)
+	found, err := c.Get(testDNSExampleAKey, &record)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if !found || record != "record" {
 		t.Fatalf("expected entry to remain, found=%v val=%q", found, record)
@@ -1322,25 +1372,25 @@ func TestCache_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
 func TestCache_Scoped_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped-invalidate-nil", time.Minute)
 
-	scoped := c.Scoped("https://app.example.com")
+	scoped := c.Scoped(testAppOrigin)
 
-	if err := scoped.Set("dns/example.com/A", "record"); err != nil {
-		t.Fatalf("Set failed: %v", err)
+	if err := scoped.Set(testDNSExampleAKey, "record"); err != nil {
+		t.Fatalf(testSetFailed, err)
 	}
 
-	scoped.OnInvalidate("dns.tree-root-changed", nil)
-	deleted, err := scoped.Invalidate("dns.tree-root-changed")
+	scoped.OnInvalidate(testDNSTreeRootChanged, nil)
+	deleted, err := scoped.Invalidate(testDNSTreeRootChanged)
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted != 0 {
 		t.Fatalf("expected nil scoped callback to be ignored, got %d deletions", deleted)
 	}
 
 	var record string
-	found, err := scoped.Get("dns/example.com/A", &record)
+	found, err := scoped.Get(testDNSExampleAKey, &record)
 	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+		t.Fatalf(testGetFailed, err)
 	}
 	if !found || record != "record" {
 		t.Fatalf("expected scoped entry to remain, found=%v val=%q", found, record)
@@ -1349,7 +1399,7 @@ func TestCache_Scoped_OnInvalidate_NilCallbackIsIgnored(t *testing.T) {
 
 func TestCache_Scoped_Wrappers_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped-wrappers", time.Minute)
-	scoped := c.Scoped("https://app.example.com")
+	scoped := c.Scoped(testAppOrigin)
 
 	if err := scoped.Set("value", "alpha"); err != nil {
 		t.Fatalf("Scoped Set failed: %v", err)
@@ -1357,10 +1407,10 @@ func TestCache_Scoped_Wrappers_Good(t *testing.T) {
 	if err := scoped.SetWithTTL("ttl", "beta", 5*time.Millisecond); err != nil {
 		t.Fatalf("Scoped SetWithTTL failed: %v", err)
 	}
-	if err := scoped.SetBinary("blob", []byte("bin"), "application/octet-stream"); err != nil {
+	if err := scoped.SetBinary("blob", []byte("bin"), testApplicationOctetStream); err != nil {
 		t.Fatalf("Scoped SetBinary failed: %v", err)
 	}
-	if err := scoped.SetBinaryWithTTL("blob-ttl", []byte("bin2"), "application/octet-stream", 5*time.Millisecond); err != nil {
+	if err := scoped.SetBinaryWithTTL("blob-ttl", []byte("bin2"), testApplicationOctetStream, 5*time.Millisecond); err != nil {
 		t.Fatalf("Scoped SetBinaryWithTTL failed: %v", err)
 	}
 
@@ -1401,29 +1451,29 @@ func TestCache_Scoped_Wrappers_Good(t *testing.T) {
 func TestCache_Scoped_Scoped_Good(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-scoped-scoped", time.Minute)
 
-	app := c.Scoped("https://app.example.com")
-	admin := app.Scoped("https://admin.example.com")
+	app := c.Scoped(testAppOrigin)
+	admin := app.Scoped(testAdminOrigin)
 
 	if admin == nil {
 		t.Fatal("expected Scoped on ScopedCache to return a cache")
 	}
 
-	if err := app.Set("user/profile", "app-user"); err != nil {
-		t.Fatalf("app Set failed: %v", err)
+	if err := app.Set(testUserProfileKey, testAppUser); err != nil {
+		t.Fatalf(testAppSetFailed, err)
 	}
-	if err := admin.Set("user/profile", "admin-user"); err != nil {
-		t.Fatalf("admin Set failed: %v", err)
+	if err := admin.Set(testUserProfileKey, testAdminUser); err != nil {
+		t.Fatalf(testAdminSetFailed, err)
 	}
 
 	var appValue string
-	found, err := app.Get("user/profile", &appValue)
-	if err != nil || !found || appValue != "app-user" {
+	found, err := app.Get(testUserProfileKey, &appValue)
+	if err != nil || !found || appValue != testAppUser {
 		t.Fatalf("unexpected app scoped value: found=%v value=%q err=%v", found, appValue, err)
 	}
 
 	var adminValue string
-	found, err = admin.Get("user/profile", &adminValue)
-	if err != nil || !found || adminValue != "admin-user" {
+	found, err = admin.Get(testUserProfileKey, &adminValue)
+	if err != nil || !found || adminValue != testAdminUser {
 		t.Fatalf("unexpected admin scoped value: found=%v value=%q err=%v", found, adminValue, err)
 	}
 
@@ -1431,12 +1481,12 @@ func TestCache_Scoped_Scoped_Good(t *testing.T) {
 		t.Fatalf("admin Clear failed: %v", err)
 	}
 
-	found, err = app.Get("user/profile", &appValue)
-	if err != nil || !found || appValue != "app-user" {
+	found, err = app.Get(testUserProfileKey, &appValue)
+	if err != nil || !found || appValue != testAppUser {
 		t.Fatalf("expected app scope to remain after clearing admin, found=%v value=%q err=%v", found, appValue, err)
 	}
 
-	found, err = admin.Get("user/profile", &adminValue)
+	found, err = admin.Get(testUserProfileKey, &adminValue)
 	if err != nil {
 		t.Fatalf("admin Get after clear failed: %v", err)
 	}
@@ -1449,7 +1499,7 @@ func TestCache_Scoped_NilReceiver_Bad(t *testing.T) {
 	var scoped *cache.ScopedCache
 	var dest string
 
-	if scoped.Scoped("https://app.example.com") != nil {
+	if scoped.Scoped(testAppOrigin) != nil {
 		t.Fatal("expected scoped Scoped to return nil on nil receiver")
 	}
 	if _, err := scoped.Path("x"); err == nil {
@@ -1464,10 +1514,10 @@ func TestCache_Scoped_NilReceiver_Bad(t *testing.T) {
 	if err := scoped.SetWithTTL("x", "v", time.Second); err == nil {
 		t.Fatal("expected scoped SetWithTTL to fail on nil receiver")
 	}
-	if err := scoped.SetBinary("x", []byte("v"), "text/plain"); err == nil {
+	if err := scoped.SetBinary("x", []byte("v"), testTextPlain); err == nil {
 		t.Fatal("expected scoped SetBinary to fail on nil receiver")
 	}
-	if err := scoped.SetBinaryWithTTL("x", []byte("v"), "text/plain", time.Second); err == nil {
+	if err := scoped.SetBinaryWithTTL("x", []byte("v"), testTextPlain, time.Second); err == nil {
 		t.Fatal("expected scoped SetBinaryWithTTL to fail on nil receiver")
 	}
 	if _, _, err := scoped.GetBinary("x"); err == nil {
@@ -1482,7 +1532,7 @@ func TestCache_Scoped_NilReceiver_Bad(t *testing.T) {
 	if err := scoped.Clear(); err == nil {
 		t.Fatal("expected scoped Clear to fail on nil receiver")
 	}
-	if err := scoped.ClearScope("https://app.example.com"); err == nil {
+	if err := scoped.ClearScope(testAppOrigin); err == nil {
 		t.Fatal("expected scoped ClearScope to fail on nil receiver")
 	}
 	if _, err := scoped.Invalidate("trigger"); err == nil {
@@ -1496,7 +1546,7 @@ func TestCache_Scoped_NilReceiver_Bad(t *testing.T) {
 func TestCache_HTTPCacheStorage_RejectsTraversalNames(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-traversal")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	tests := []struct {
@@ -1580,58 +1630,58 @@ func TestCache_HTTPCacheStorage_NilReceiver_Bad(t *testing.T) {
 }
 
 func TestCache_HTTPCacheStorage_Good(t *testing.T) {
+	const baseDir = "/tmp/cache-http"
+
 	medium := coreio.NewMockMedium()
-	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http")
+	storage, err := cache.NewCacheStorage(medium, baseDir)
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
-	httpCache, err := storage.Open("my-app-v1")
+	httpCache, err := storage.Open(testHTTPCacheName)
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
-	if again, err := storage.Open("my-app-v1"); err != nil {
-		t.Fatalf("storage.Open reuse failed: %v", err)
-	} else if again != httpCache {
-		t.Fatal("expected Open to reuse the existing cache instance")
-	}
+	assertStorageOpenReusesHTTPCache(t, storage, httpCache)
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	resp := cache.CachedResponse{
 		Status:     200,
 		StatusText: "OK",
 		Headers: map[string]string{
-			"Content-Type": "text/css",
+			testHeaderContentType: testTextCSS,
 		},
 	}
 
 	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf(testPutFailed, err)
 	}
 
-	metaEntries, err := medium.List("/tmp/cache-http/my-app-v1/responses")
+	assertStoredHTTPMetadata(t, medium, baseDir, req, resp)
+	assertHTTPCacheMatchAndBody(t, httpCache, req)
+	assertHTTPCacheKeys(t, httpCache, testStyleURL)
+	assertHTTPStorageDeleteLifecycle(t, storage, httpCache, req)
+}
+
+func assertStorageOpenReusesHTTPCache(t *testing.T, storage *cache.CacheStorage, want *cache.HTTPCache) {
+	t.Helper()
+
+	again, err := storage.Open(testHTTPCacheName)
 	if err != nil {
-		t.Fatalf("List response metadata failed: %v", err)
+		t.Fatalf("storage.Open reuse failed: %v", err)
 	}
-	var metaPath string
-	for _, entry := range metaEntries {
-		if core.HasSuffix(entry.Name(), ".json") {
-			metaPath = "/tmp/cache-http/my-app-v1/responses/" + entry.Name()
-			break
-		}
+	if again != want {
+		t.Fatal("expected Open to reuse the existing cache instance")
 	}
-	if metaPath == "" {
-		t.Fatal("expected response metadata file")
-	}
+}
 
-	rawMeta, err := medium.Read(metaPath)
-	if err != nil {
-		t.Fatalf("Read response metadata failed: %v", err)
-	}
+func assertStoredHTTPMetadata(t *testing.T, medium *coreio.MockMedium, baseDir string, req cache.CachedRequest, resp cache.CachedResponse) {
+	t.Helper()
 
+	rawMeta := readStoredHTTPMetadata(t, medium, baseDir)
 	var stored struct {
 		Request  cache.CachedRequest  `json:"request"`
 		Response cache.CachedResponse `json:"response"`
@@ -1646,10 +1696,42 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	if stored.Response.Status != resp.Status || stored.Response.StatusText != resp.StatusText {
 		t.Fatalf("unexpected stored response metadata: %+v", stored.Response)
 	}
+}
+
+func readStoredHTTPMetadata(t *testing.T, medium *coreio.MockMedium, baseDir string) string {
+	t.Helper()
+
+	metaPath := storedHTTPMetadataPath(t, medium, baseDir)
+	rawMeta, err := medium.Read(metaPath)
+	if err != nil {
+		t.Fatalf("Read response metadata failed: %v", err)
+	}
+	return rawMeta
+}
+
+func storedHTTPMetadataPath(t *testing.T, medium *coreio.MockMedium, baseDir string) string {
+	t.Helper()
+
+	responseDir := core.JoinPath(baseDir, testHTTPCacheName, "responses")
+	metaEntries, err := medium.List(responseDir)
+	if err != nil {
+		t.Fatalf("List response metadata failed: %v", err)
+	}
+	for _, entry := range metaEntries {
+		if core.HasSuffix(entry.Name(), ".json") {
+			return core.JoinPath(responseDir, entry.Name())
+		}
+	}
+	t.Fatal("expected response metadata file")
+	return ""
+}
+
+func assertHTTPCacheMatchAndBody(t *testing.T, httpCache *cache.HTTPCache, req cache.CachedRequest) {
+	t.Helper()
 
 	matched, err := httpCache.Match(req)
 	if err != nil {
-		t.Fatalf("Match failed: %v", err)
+		t.Fatalf(testMatchFailed, err)
 	}
 	if matched == nil {
 		t.Fatalf("expected matched response")
@@ -1662,6 +1744,10 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	if string(body) != "body" {
 		t.Fatalf("unexpected body: %q", body)
 	}
+}
+
+func assertHTTPCacheKeys(t *testing.T, httpCache *cache.HTTPCache, wantURL string) {
+	t.Helper()
 
 	urls, err := httpCache.Keys()
 	if err != nil {
@@ -1670,14 +1756,18 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	if len(urls) != 1 {
 		t.Fatalf("expected one URL, got %d", len(urls))
 	}
-	if urls[0] != "https://example.com/style.css" {
+	if urls[0] != wantURL {
 		t.Fatalf("unexpected url: %q", urls[0])
 	}
+}
+
+func assertHTTPStorageDeleteLifecycle(t *testing.T, storage *cache.CacheStorage, httpCache *cache.HTTPCache, req cache.CachedRequest) {
+	t.Helper()
 
 	if err := httpCache.Delete(req); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	matched, err = httpCache.Match(req)
+	matched, err := httpCache.Match(req)
 	if err != nil {
 		t.Fatalf("Match after delete failed: %v", err)
 	}
@@ -1689,15 +1779,15 @@ func TestCache_HTTPCacheStorage_Good(t *testing.T) {
 	if err != nil {
 		t.Fatalf("storage.Keys before delete failed: %v", err)
 	}
-	if len(names) != 1 || names[0] != "my-app-v1" {
+	if len(names) != 1 || names[0] != testHTTPCacheName {
 		t.Fatalf("expected cache name to be listed, got %v", core.Join(",", names...))
 	}
 
-	if err := storage.Delete("my-app-v1"); err != nil {
+	if err := storage.Delete(testHTTPCacheName); err != nil {
 		t.Fatalf("storage.Delete failed: %v", err)
 	}
 
-	if err := storage.Delete("my-app-v1"); err != nil {
+	if err := storage.Delete(testHTTPCacheName); err != nil {
 		t.Fatalf("storage.Delete on missing cache should be a no-op, got %v", err)
 	}
 
@@ -1714,12 +1804,12 @@ func TestCache_HTTPCacheStorage_Good_LongURLUsesFixedWidthStorageKey(t *testing.
 	medium := coreio.NewMockMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-long-url")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("long-url")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
@@ -1727,7 +1817,7 @@ func TestCache_HTTPCacheStorage_Good_LongURLUsesFixedWidthStorageKey(t *testing.
 		Method: "GET",
 	}
 	if err := httpCache.Put(req, cache.CachedResponse{Status: 200, StatusText: "OK"}, []byte("body")); err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf(testPutFailed, err)
 	}
 
 	key := httpCacheStorageKey(req)
@@ -1741,7 +1831,7 @@ func TestCache_HTTPCacheStorage_Good_LongURLUsesFixedWidthStorageKey(t *testing.
 
 	matched, err := httpCache.Match(req)
 	if err != nil {
-		t.Fatalf("Match failed: %v", err)
+		t.Fatalf(testMatchFailed, err)
 	}
 	if matched == nil {
 		t.Fatal("expected long URL response to match")
@@ -1752,7 +1842,7 @@ func TestCache_HTTPCacheStorage_Keys_Good_EmptyDir(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-empty-keys")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	medium.listErr["/tmp/cache-http-empty-keys"] = fs.ErrNotExist
@@ -1770,7 +1860,7 @@ func TestCache_HTTPCacheStorage_Keys_Bad_ListFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-keys-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	medium.listErr["/tmp/cache-http-keys-bad"] = core.E("cache_test", "boom", nil)
@@ -1784,20 +1874,20 @@ func TestCache_HTTPCacheStorage_Delete_Bad_BackendFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-delete-storage-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	medium.deleteAllErr["/tmp/cache-http-delete-storage-bad/blocked"] = core.E("cache_test", "boom", nil)
 
 	if err := storage.Delete("blocked"); err == nil {
-		t.Fatal("expected Delete to surface backend failure")
+		t.Fatal(testWantDeleteBackendFailure)
 	}
 }
 
 func TestCache_HTTPCacheStorage_Close_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-close")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	if err := storage.Close(); err != nil {
@@ -1808,7 +1898,7 @@ func TestCache_HTTPCacheStorage_Close_Good(t *testing.T) {
 func TestCache_HTTPCacheStorage_Close_AllowsReuse(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-close-reuse")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	if err := storage.Close(); err != nil {
@@ -1834,12 +1924,12 @@ func TestCache_HTTPCacheStorage_Close_AllowsReuse(t *testing.T) {
 func TestCache_HTTPCacheStorage_DottedName_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-dotted")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("api.v2-cache")
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
@@ -1849,7 +1939,7 @@ func TestCache_HTTPCacheStorage_DottedName_Good(t *testing.T) {
 	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
 
 	if err := httpCache.Put(req, resp, []byte("ok")); err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf(testPutFailed, err)
 	}
 
 	names, err := storage.Keys()
@@ -1864,12 +1954,12 @@ func TestCache_HTTPCacheStorage_DottedName_Good(t *testing.T) {
 func TestCache_HTTPCacheDeleteMissing_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-delete-missing")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("missing-delete")
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
@@ -1886,12 +1976,12 @@ func TestCache_HTTPCache_Keys_Good_EmptyResponseDir(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-keys-empty")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("keys-empty")
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
 
 	medium.listErr["/tmp/cache-http-keys-empty/keys-empty/responses"] = fs.ErrNotExist
@@ -1909,12 +1999,12 @@ func TestCache_HTTPCache_Keys_Bad_ListFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-keys-list-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("keys-list-bad")
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
 
 	medium.listErr["/tmp/cache-http-keys-list-bad/keys-list-bad/responses"] = core.E("cache_test", "boom", nil)
@@ -1927,12 +2017,12 @@ func TestCache_HTTPCache_Keys_Bad_ListFailure(t *testing.T) {
 func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-body-safety")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("body-safety")
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
 
 	tests := []struct {
@@ -1942,12 +2032,12 @@ func TestCache_HTTPCacheReadBody_Bad(t *testing.T) {
 		{name: "nil", resp: nil},
 		{name: "empty", resp: &cache.CachedResponse{}},
 		{name: "absolute", resp: &cache.CachedResponse{BodyPath: "/responses/secret.bin"}},
-		{name: "traversal", resp: &cache.CachedResponse{BodyPath: "../../etc/passwd"}},
+		{name: "traversal", resp: &cache.CachedResponse{BodyPath: testTraversalKey}},
 		{name: "wrong-root", resp: &cache.CachedResponse{BodyPath: "config/secret.bin"}},
 		{name: "wrong-extension", resp: &cache.CachedResponse{BodyPath: "responses/secret.txt"}},
 		{name: "backslash", resp: &cache.CachedResponse{BodyPath: `responses\secret.bin`}},
 		{name: "null-byte", resp: &cache.CachedResponse{BodyPath: "responses/secret\x00.bin"}},
-		{name: "too-long", resp: &cache.CachedResponse{BodyPath: "responses/" + repeatString("a", 4097) + ".bin"}},
+		{name: "too-long", resp: &cache.CachedResponse{BodyPath: testResponsesPrefix + repeatString("a", 4097) + ".bin"}},
 	}
 
 	for _, tt := range tests {
@@ -1963,12 +2053,12 @@ func TestCache_HTTPCacheReadBody_Bad_MissingPayload(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-body-missing")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("body-missing")
 	if err != nil {
-		t.Fatalf("storage.Open failed: %v", err)
+		t.Fatalf(testStorageOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
@@ -1977,7 +2067,7 @@ func TestCache_HTTPCacheReadBody_Bad_MissingPayload(t *testing.T) {
 	}
 	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
 	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf(testPutFailed, err)
 	}
 
 	key := httpCacheStorageKey(req)
@@ -1986,7 +2076,7 @@ func TestCache_HTTPCacheReadBody_Bad_MissingPayload(t *testing.T) {
 
 	matched, err := httpCache.Match(req)
 	if err != nil {
-		t.Fatalf("Match failed: %v", err)
+		t.Fatalf(testMatchFailed, err)
 	}
 	if matched == nil {
 		t.Fatal("expected response metadata to remain")
@@ -2023,16 +2113,16 @@ func TestCache_HTTPCache_Delete_Bad_BackendFailure(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-delete-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("delete-bad")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := httpCacheStorageKey(req)
@@ -2040,7 +2130,7 @@ func TestCache_HTTPCache_Delete_Bad_BackendFailure(t *testing.T) {
 	medium.deleteErr[metaPath] = core.E("cache_test", "boom", nil)
 
 	if err := httpCache.Delete(req); err == nil {
-		t.Fatal("expected Delete to surface backend failure")
+		t.Fatal(testWantDeleteBackendFailure)
 	}
 }
 
@@ -2048,21 +2138,21 @@ func TestCache_HTTPCache_Match_Bad_IncompleteEnvelope(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-incomplete")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-incomplete")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := legacyHTTPCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-match-incomplete/match-incomplete/responses/" + key + ".json"
-	medium.Files[metaPath] = `{"request":{"url":"https://example.com/style.css","method":"GET"}}`
+	medium.Files[metaPath] = `{"request":{"url":testStyleURL,"method":"GET"}}`
 
 	if matched, err := httpCache.Match(req); err == nil || matched != nil {
 		t.Fatalf("expected Match to reject incomplete cached response envelope, matched=%v err=%v", matched, err)
@@ -2072,12 +2162,12 @@ func TestCache_HTTPCache_Match_Bad_IncompleteEnvelope(t *testing.T) {
 func TestCache_HTTPCache_Match_Bad_EmptyRequest(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-match-empty")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-empty")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	if matched, err := httpCache.Match(cache.CachedRequest{}); err == nil || matched != nil {
@@ -2089,16 +2179,16 @@ func TestCache_HTTPCache_LegacyMetadata_Good(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-legacy")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("legacy")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := legacyHTTPCacheStorageKey(req)
@@ -2108,20 +2198,20 @@ func TestCache_HTTPCache_LegacyMetadata_Good(t *testing.T) {
 	legacy := cache.CachedResponse{
 		Status:     200,
 		StatusText: "OK",
-		Headers:    map[string]string{"Content-Type": "text/css"},
-		BodyPath:   "responses/" + key + ".bin",
+		Headers:    map[string]string{testHeaderContentType: testTextCSS},
+		BodyPath:   testResponsesPrefix + key + ".bin",
 		CachedAt:   time.Now(),
 	}
 	raw, err := json.Marshal(legacy)
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf(testMarshalFailed, err)
 	}
 	medium.Files[metaPath] = string(raw)
 	medium.Files[binPath] = "body"
 
 	matched, err := httpCache.Match(req)
 	if err != nil {
-		t.Fatalf("Match failed: %v", err)
+		t.Fatalf(testMatchFailed, err)
 	}
 	if matched == nil {
 		t.Fatal("expected legacy cached response to match")
@@ -2142,12 +2232,12 @@ func TestCache_HTTPCache_LegacyMetadata_Good(t *testing.T) {
 func TestCache_HTTPCache_Put_Bad(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-put-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("put-bad")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	if err := httpCache.Put(cache.CachedRequest{}, cache.CachedResponse{}, []byte("body")); err == nil {
@@ -2158,12 +2248,12 @@ func TestCache_HTTPCache_Put_Bad(t *testing.T) {
 func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-put-request-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("put-request-bad")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	tests := []struct {
@@ -2173,7 +2263,7 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 		{
 			name: "invalid-method",
 			req: cache.CachedRequest{
-				URL:    "https://example.com/style.css",
+				URL:    testStyleURL,
 				Method: "G ET",
 			},
 		},
@@ -2187,7 +2277,7 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 		{
 			name: "method-control-bytes",
 			req: cache.CachedRequest{
-				URL:    "https://example.com/style.css",
+				URL:    testStyleURL,
 				Method: "GET\r\nX-Injected: yes",
 			},
 		},
@@ -2201,7 +2291,7 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 		{
 			name: "method-too-long",
 			req: cache.CachedRequest{
-				URL:    "https://example.com/style.css",
+				URL:    testStyleURL,
 				Method: repeatString("G", 33),
 			},
 		},
@@ -2220,16 +2310,16 @@ func TestCache_HTTPCache_Put_Bad_RequestMetadata(t *testing.T) {
 func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-put-metadata-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("put-metadata-bad")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 
@@ -2262,7 +2352,7 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 			resp: cache.CachedResponse{
 				Status:     200,
 				StatusText: "OK",
-				Headers:    map[string]string{"Content-Type": "text/plain\r\nX-Injected: yes"},
+				Headers:    map[string]string{testHeaderContentType: "text/plain\r\nX-Injected: yes"},
 			},
 		},
 		{
@@ -2286,7 +2376,7 @@ func TestCache_HTTPCache_Put_Bad_HTTPMetadata(t *testing.T) {
 			resp: cache.CachedResponse{
 				Status:     200,
 				StatusText: "OK",
-				Headers:    map[string]string{"Content-Type": repeatString("a", 8193)},
+				Headers:    map[string]string{testHeaderContentType: repeatString("a", 8193)},
 			},
 		},
 		{
@@ -2318,15 +2408,15 @@ func TestCache_HTTPCache_Put_Ugly(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-put-ugly")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("put-ugly")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
-	req := cache.CachedRequest{URL: "https://example.com/style.css", Method: "GET"}
+	req := cache.CachedRequest{URL: testStyleURL, Method: "GET"}
 	key := httpCacheStorageKey(req)
 	metaPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".json"
 	binPath := "/tmp/cache-http-put-ugly/put-ugly/responses/" + key + ".bin"
@@ -2344,16 +2434,16 @@ func TestCache_HTTPCache_Match_Bad_RequestMismatch(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-mismatch")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-mismatch")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := httpCacheStorageKey(req)
@@ -2370,14 +2460,14 @@ func TestCache_HTTPCache_Match_Bad_RequestMismatch(t *testing.T) {
 		Response: cache.CachedResponse{
 			Status:     200,
 			StatusText: "OK",
-			Headers:    map[string]string{"Content-Type": "text/css"},
-			BodyPath:   "responses/" + key + ".bin",
+			Headers:    map[string]string{testHeaderContentType: testTextCSS},
+			BodyPath:   testResponsesPrefix + key + ".bin",
 		},
 	}
 
 	raw, err := json.Marshal(record)
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf(testMarshalFailed, err)
 	}
 	medium.Files[metaPath] = string(raw)
 
@@ -2390,16 +2480,16 @@ func TestCache_HTTPCache_Match_Bad_BodyPath(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-body-path")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-body-path")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := httpCacheStorageKey(req)
@@ -2413,14 +2503,14 @@ func TestCache_HTTPCache_Match_Bad_BodyPath(t *testing.T) {
 		Response: cache.CachedResponse{
 			Status:     200,
 			StatusText: "OK",
-			Headers:    map[string]string{"Content-Type": "text/css"},
+			Headers:    map[string]string{testHeaderContentType: testTextCSS},
 			BodyPath:   "config/secret.bin",
 		},
 	}
 
 	raw, err := json.Marshal(record)
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf(testMarshalFailed, err)
 	}
 	medium.Files[metaPath] = string(raw)
 
@@ -2433,16 +2523,16 @@ func TestCache_HTTPCache_Match_Bad_BodyPathMismatch(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-body-path-mismatch")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-body-path-mismatch")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := httpCacheStorageKey(req)
@@ -2456,14 +2546,14 @@ func TestCache_HTTPCache_Match_Bad_BodyPathMismatch(t *testing.T) {
 		Response: cache.CachedResponse{
 			Status:     200,
 			StatusText: "OK",
-			Headers:    map[string]string{"Content-Type": "text/css"},
+			Headers:    map[string]string{testHeaderContentType: testTextCSS},
 			BodyPath:   "responses/other.bin",
 		},
 	}
 
 	raw, err := json.Marshal(record)
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf(testMarshalFailed, err)
 	}
 	medium.Files[metaPath] = string(raw)
 
@@ -2476,16 +2566,16 @@ func TestCache_HTTPCache_Match_RejectsTamperedMetadata(t *testing.T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-http-match-tampered")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-tampered")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
-		URL:    "https://example.com/style.css",
+		URL:    testStyleURL,
 		Method: "GET",
 	}
 	key := httpCacheStorageKey(req)
@@ -2500,13 +2590,13 @@ func TestCache_HTTPCache_Match_RejectsTamperedMetadata(t *testing.T) {
 			Status:     200,
 			StatusText: "OK",
 			Headers:    map[string]string{"X-Inject\r\ned": "value"},
-			BodyPath:   "responses/" + key + ".bin",
+			BodyPath:   testResponsesPrefix + key + ".bin",
 		},
 	}
 
 	raw, err := json.Marshal(record)
 	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+		t.Fatalf(testMarshalFailed, err)
 	}
 	medium.Files[metaPath] = string(raw)
 
@@ -2518,23 +2608,23 @@ func TestCache_HTTPCache_Match_RejectsTamperedMetadata(t *testing.T) {
 func TestCache_HTTPCache_Keys_Good(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-keys")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("keys")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	body := []byte("body")
-	if err := httpCache.Put(cache.CachedRequest{URL: "https://example.com/a", Method: "GET"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
-		t.Fatalf("Put failed: %v", err)
+	if err := httpCache.Put(cache.CachedRequest{URL: testExampleAURL, Method: "GET"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
+		t.Fatalf(testPutFailed, err)
 	}
-	if err := httpCache.Put(cache.CachedRequest{URL: "https://example.com/a", Method: "HEAD"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
+	if err := httpCache.Put(cache.CachedRequest{URL: testExampleAURL, Method: "HEAD"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
 		t.Fatalf("Put duplicate URL failed: %v", err)
 	}
 	if err := httpCache.Put(cache.CachedRequest{URL: "https://example.com/b", Method: "GET"}, cache.CachedResponse{Status: 200, StatusText: "OK"}, body); err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf(testPutFailed, err)
 	}
 
 	urls, err := httpCache.Keys()
@@ -2544,7 +2634,7 @@ func TestCache_HTTPCache_Keys_Good(t *testing.T) {
 	if len(urls) != 2 {
 		t.Fatalf("expected deduped URLs, got %v", urls)
 	}
-	if urls[0] != "https://example.com/a" || urls[1] != "https://example.com/b" {
+	if urls[0] != testExampleAURL || urls[1] != "https://example.com/b" {
 		t.Fatalf("unexpected sorted URLs: %v", urls)
 	}
 }
@@ -2552,12 +2642,12 @@ func TestCache_HTTPCache_Keys_Good(t *testing.T) {
 func TestCache_HTTPCache_Match_Bad(t *testing.T) {
 	storage, err := cache.NewCacheStorage(coreio.NewMockMedium(), "/tmp/cache-http-match-bad")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("match-bad")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	matched, err := httpCache.Match(cache.CachedRequest{URL: "https://example.com/missing", Method: "GET"})
@@ -2592,13 +2682,13 @@ func TestCache_ThreatUntrustedKeyDoS_RejectsOversizedKeysOnWritePaths(t *testing
 		{
 			name: "set-binary",
 			fn: func() error {
-				return c.SetBinary(key, []byte("value"), "text/plain")
+				return c.SetBinary(key, []byte("value"), testTextPlain)
 			},
 		},
 		{
 			name: "set-binary-with-ttl",
 			fn: func() error {
-				return c.SetBinaryWithTTL(key, []byte("value"), "text/plain", time.Minute)
+				return c.SetBinaryWithTTL(key, []byte("value"), testTextPlain, time.Minute)
 			},
 		},
 	}
@@ -2643,12 +2733,12 @@ func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *test
 	medium := coreio.NewMockMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/cache-threat-http-path")
 	if err != nil {
-		t.Fatalf("NewCacheStorage failed: %v", err)
+		t.Fatalf(testNewCacheStorageFailed, err)
 	}
 
 	httpCache, err := storage.Open("assets")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf(testOpenFailed, err)
 	}
 
 	req := cache.CachedRequest{
@@ -2657,7 +2747,7 @@ func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *test
 	}
 	resp := cache.CachedResponse{Status: 200, StatusText: "OK"}
 	if err := httpCache.Put(req, resp, []byte("body")); err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf(testPutFailed, err)
 	}
 
 	key := httpCacheStorageKey(req)
@@ -2675,7 +2765,7 @@ func TestCache_ThreatPathTraversal_HTTPCacheUsesHashedRequestStorageKeys(t *test
 
 	matched, err := httpCache.Match(req)
 	if err != nil {
-		t.Fatalf("Match failed: %v", err)
+		t.Fatalf(testMatchFailed, err)
 	}
 	if matched == nil {
 		t.Fatal("expected cached response to match")
@@ -2710,7 +2800,7 @@ func TestCache_ThreatTOCTOU_InvalidateOnInvalidateRegistrationIsSnapshotRaceClea
 
 	deleted, err := c.Invalidate("reload")
 	if err != nil {
-		t.Fatalf("Invalidate failed: %v", err)
+		t.Fatalf(testInvalidateFailed, err)
 	}
 	if deleted != 1 {
 		t.Fatalf("expected first invalidation to delete snapshot callback match only, got %d", deleted)
@@ -2775,14 +2865,14 @@ func TestCache_ThreatTOCTOU_InvalidateConcurrentRegistrationRaceClean(t *testing
 	close(errCh)
 
 	for err := range errCh {
-		t.Errorf("Invalidate failed: %v", err)
+		t.Errorf(testInvalidateFailed, err)
 	}
 }
 
 func TestCache_ThreatTOCTOU_ExpiredGetConcurrentReadersReturnNotFound(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-threat-expired-get", time.Minute)
 	if err := c.SetWithTTL("ttl/race", map[string]string{"state": "expired"}, time.Nanosecond); err != nil {
-		t.Fatalf("SetWithTTL failed: %v", err)
+		t.Fatalf(testSetWithTTLFailed, err)
 	}
 	time.Sleep(2 * time.Millisecond)
 
@@ -2921,7 +3011,7 @@ func TestCache_ThreatTOCTOU_ConcurrentSetSameKeyRaceClean(t *testing.T) {
 
 func TestCache_ThreatTOCTOU_ConcurrentGetSetDeleteSameKeyRaceClean(t *testing.T) {
 	c, _ := newTestCache(t, "/tmp/cache-threat-concurrent-mixed", time.Minute)
-	if err := c.Set("race/mixed", map[string]int{"writer": -1}); err != nil {
+	if err := c.Set(testRaceMixedKey, map[string]int{"writer": -1}); err != nil {
 		t.Fatalf("initial Set failed: %v", err)
 	}
 
@@ -2933,32 +3023,7 @@ func TestCache_ThreatTOCTOU_ConcurrentGetSetDeleteSameKeyRaceClean(t *testing.T)
 	var done sync.WaitGroup
 	done.Add(workers)
 	for i := range workers {
-		go func(value int) {
-			defer done.Done()
-			<-start
-			for op := range operations {
-				switch (value + op) % 3 {
-				case 0:
-					var got map[string]int
-					found, err := c.Get("race/mixed", &got)
-					if err != nil {
-						errCh <- err.Error()
-						continue
-					}
-					if found && (got["writer"] < -1 || got["writer"] >= workers) {
-						errCh <- "Get returned a writer outside the written range"
-					}
-				case 1:
-					if err := c.Set("race/mixed", map[string]int{"writer": value}); err != nil {
-						errCh <- err.Error()
-					}
-				default:
-					if err := c.Delete("race/mixed"); err != nil {
-						errCh <- err.Error()
-					}
-				}
-			}
-		}(i)
+		go runMixedRaceWorker(c, start, &done, errCh, i, workers, operations)
 	}
 
 	close(start)
@@ -2970,11 +3035,46 @@ func TestCache_ThreatTOCTOU_ConcurrentGetSetDeleteSameKeyRaceClean(t *testing.T)
 	}
 }
 
+func runMixedRaceWorker(c *cache.Cache, start <-chan struct{}, done *sync.WaitGroup, errCh chan<- string, value, workers, operations int) {
+	defer done.Done()
+	<-start
+	for op := range operations {
+		runMixedRaceOperation(c, errCh, value, op, workers)
+	}
+}
+
+func runMixedRaceOperation(c *cache.Cache, errCh chan<- string, value, op, workers int) {
+	switch (value + op) % 3 {
+	case 0:
+		checkMixedRaceRead(c, errCh, workers)
+	case 1:
+		if err := c.Set(testRaceMixedKey, map[string]int{"writer": value}); err != nil {
+			errCh <- err.Error()
+		}
+	default:
+		if err := c.Delete(testRaceMixedKey); err != nil {
+			errCh <- err.Error()
+		}
+	}
+}
+
+func checkMixedRaceRead(c *cache.Cache, errCh chan<- string, workers int) {
+	var got map[string]int
+	found, err := c.Get(testRaceMixedKey, &got)
+	if err != nil {
+		errCh <- err.Error()
+		return
+	}
+	if found && (got["writer"] < -1 || got["writer"] >= workers) {
+		errCh <- "Get returned a writer outside the written range"
+	}
+}
+
 func TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites(t *testing.T) {
 	medium := &raceProbeMedium{MockMedium: coreio.NewMockMedium()}
 	c, err := cache.New(medium, "/tmp/cache-threat-toctou", time.Minute)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf(testNewFailed, err)
 	}
 
 	const workers = 32
@@ -2993,7 +3093,7 @@ func TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites(t *testing.T) {
 			<-start
 
 			var got map[string]int
-			found, err := c.Get("race/key", &got)
+			found, err := c.Get(testRaceKey, &got)
 			if err != nil {
 				errCh <- err.Error()
 			}
@@ -3003,7 +3103,7 @@ func TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites(t *testing.T) {
 			reads.Done()
 
 			<-writes
-			if err := c.Set("race/key", map[string]int{"writer": value}); err != nil {
+			if err := c.Set(testRaceKey, map[string]int{"writer": value}); err != nil {
 				errCh <- err.Error()
 			}
 		}(i)
@@ -3020,7 +3120,7 @@ func TestCache_ThreatTOCTOU_GetThenSetSerializesEntryWrites(t *testing.T) {
 	}
 
 	var got map[string]int
-	found, err := c.Get("race/key", &got)
+	found, err := c.Get(testRaceKey, &got)
 	if err != nil {
 		t.Fatalf("final Get failed: %v", err)
 	}

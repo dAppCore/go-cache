@@ -10,6 +10,25 @@ import (
 	coreio "dappco.re/go/io"
 )
 
+const (
+	ax7TextPlain        = "text/plain"
+	ax7AcmeWidgets      = "acme/widgets"
+	ax7EscapeKey        = "../escape"
+	ax7AgentProfileKey  = "agent/profile"
+	ax7AgentMissingKey  = "agent/missing"
+	ax7ArtifactBlobKey  = "artifact/blob"
+	ax7AgentOneKey      = "agent/one"
+	ax7AgentTwoKey      = "agent/two"
+	ax7AgentKeepKey     = "agent/keep"
+	ax7AppOrigin        = "https://app.example"
+	ax7AdminOrigin      = "https://admin.example"
+	ax7PrefsThemeKey    = "prefs/theme"
+	ax7PrefsPattern     = "prefs/*"
+	ax7ListFailed       = "list failed"
+	ax7HTTPDataURL      = "https://example.com/data"
+	ax7HTTPMatchUglyDir = "/tmp/ax7-http-match-ugly"
+)
+
 func ax7Cache(t *T, baseDir string) (*cache.Cache, *coreio.MockMedium) {
 	t.Helper()
 	return newTestCache(t, baseDir, time.Minute)
@@ -41,7 +60,7 @@ func ax7Response(status int) cache.CachedResponse {
 	return cache.CachedResponse{
 		Status:     status,
 		StatusText: "OK",
-		Headers:    map[string]string{"Content-Type": "text/plain"},
+		Headers:    map[string]string{"Content-Type": ax7TextPlain},
 	}
 }
 
@@ -64,10 +83,10 @@ func TestCache_NewCacheStorage_Ugly(t *T) {
 }
 
 func TestCache_GitHubReposKey_Bad(t *T) {
-	key := cache.GitHubReposKey("acme/widgets")
+	key := cache.GitHubReposKey(ax7AcmeWidgets)
 
 	AssertContains(t, key, "acme%2Fwidgets")
-	AssertNotContains(t, key, "acme/widgets")
+	AssertNotContains(t, key, ax7AcmeWidgets)
 	AssertContains(t, key, "repos")
 }
 
@@ -80,7 +99,7 @@ func TestCache_GitHubReposKey_Ugly(t *T) {
 }
 
 func TestCache_GitHubRepoKey_Bad(t *T) {
-	key := cache.GitHubRepoKey("acme/widgets", "api server")
+	key := cache.GitHubRepoKey(ax7AcmeWidgets, "api server")
 
 	AssertContains(t, key, "acme%2Fwidgets")
 	AssertContains(t, key, "api%20server")
@@ -160,7 +179,7 @@ func TestCache_Cache_Path_Good(t *T) {
 
 func TestCache_Cache_Path_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-path-bad")
-	path, err := c.Path("../escape")
+	path, err := c.Path(ax7EscapeKey)
 
 	AssertError(t, err)
 	AssertEqual(t, "", path)
@@ -178,10 +197,10 @@ func TestCache_Cache_Path_Ugly(t *T) {
 
 func TestCache_Cache_Get_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-get-good")
-	RequireNoError(t, c.Set("agent/profile", map[string]string{"name": "codex"}))
+	RequireNoError(t, c.Set(ax7AgentProfileKey, map[string]string{"name": "codex"}))
 
 	var got map[string]string
-	found, err := c.Get("agent/profile", &got)
+	found, err := c.Get(ax7AgentProfileKey, &got)
 	AssertNoError(t, err)
 	AssertTrue(t, found)
 	AssertEqual(t, "codex", got["name"])
@@ -191,7 +210,7 @@ func TestCache_Cache_Get_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-get-bad")
 	var got map[string]string
 
-	found, err := c.Get("agent/missing", &got)
+	found, err := c.Get(ax7AgentMissingKey, &got)
 	AssertNoError(t, err)
 	AssertFalse(t, found)
 	AssertNil(t, got)
@@ -199,9 +218,9 @@ func TestCache_Cache_Get_Bad(t *T) {
 
 func TestCache_Cache_Get_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-get-ugly")
-	RequireNoError(t, c.Set("agent/profile", map[string]string{"name": "codex"}))
+	RequireNoError(t, c.Set(ax7AgentProfileKey, map[string]string{"name": "codex"}))
 
-	found, err := c.Get("agent/profile", nil)
+	found, err := c.Get(ax7AgentProfileKey, nil)
 	AssertError(t, err)
 	AssertFalse(t, found)
 	AssertContains(t, err.Error(), "unmarshal")
@@ -209,7 +228,7 @@ func TestCache_Cache_Get_Ugly(t *T) {
 
 func TestCache_Cache_Set_Good(t *T) {
 	c, medium := ax7Cache(t, "/tmp/ax7-cache-set-good")
-	err := c.Set("agent/profile", map[string]string{"name": "codex"})
+	err := c.Set(ax7AgentProfileKey, map[string]string{"name": "codex"})
 	RequireNoError(t, err)
 
 	raw, err := medium.Read("/tmp/ax7-cache-set-good/agent/profile.json")
@@ -227,7 +246,9 @@ func TestCache_Cache_Set_Bad(t *T) {
 
 func TestCache_Cache_Set_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-set-ugly")
-	err := c.Set("agent/handler", map[string]any{"fn": func() {}})
+	err := c.Set("agent/handler", map[string]any{"fn": func() {
+		// Intentionally empty: JSON marshaling rejects function values before invocation.
+	}})
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "marshal")
@@ -235,10 +256,10 @@ func TestCache_Cache_Set_Ugly(t *T) {
 
 func TestCache_Cache_SetWithTTL_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setttl-good")
-	RequireNoError(t, c.SetWithTTL("agent/profile", "codex", time.Minute))
+	RequireNoError(t, c.SetWithTTL(ax7AgentProfileKey, "codex", time.Minute))
 
 	var got string
-	found, err := c.Get("agent/profile", &got)
+	found, err := c.Get(ax7AgentProfileKey, &got)
 	AssertNoError(t, err)
 	AssertTrue(t, found)
 	AssertEqual(t, "codex", got)
@@ -246,7 +267,7 @@ func TestCache_Cache_SetWithTTL_Good(t *T) {
 
 func TestCache_Cache_SetWithTTL_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setttl-bad")
-	err := c.SetWithTTL("agent/profile", "codex", -time.Second)
+	err := c.SetWithTTL(ax7AgentProfileKey, "codex", -time.Second)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "ttl")
@@ -254,10 +275,10 @@ func TestCache_Cache_SetWithTTL_Bad(t *T) {
 
 func TestCache_Cache_SetWithTTL_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setttl-ugly")
-	RequireNoError(t, c.SetWithTTL("agent/profile", "codex", 0))
+	RequireNoError(t, c.SetWithTTL(ax7AgentProfileKey, "codex", 0))
 
 	var got string
-	found, err := c.Get("agent/profile", &got)
+	found, err := c.Get(ax7AgentProfileKey, &got)
 	AssertNoError(t, err)
 	AssertFalse(t, found)
 	AssertEqual(t, "", got)
@@ -265,9 +286,9 @@ func TestCache_Cache_SetWithTTL_Ugly(t *T) {
 
 func TestCache_Cache_SetBinary_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setbinary-good")
-	RequireNoError(t, c.SetBinary("artifact/blob", []byte("payload"), "text/plain"))
+	RequireNoError(t, c.SetBinary(ax7ArtifactBlobKey, []byte("payload"), ax7TextPlain))
 
-	got, found, err := c.GetBinary("artifact/blob")
+	got, found, err := c.GetBinary(ax7ArtifactBlobKey)
 	AssertNoError(t, err)
 	AssertTrue(t, found)
 	AssertEqual(t, []byte("payload"), got)
@@ -275,7 +296,7 @@ func TestCache_Cache_SetBinary_Good(t *T) {
 
 func TestCache_Cache_SetBinary_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setbinary-bad")
-	err := c.SetBinary("../escape", []byte("payload"), "text/plain")
+	err := c.SetBinary(ax7EscapeKey, []byte("payload"), ax7TextPlain)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "invalid")
@@ -293,9 +314,9 @@ func TestCache_Cache_SetBinary_Ugly(t *T) {
 
 func TestCache_Cache_SetBinaryWithTTL_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setbinaryttl-good")
-	RequireNoError(t, c.SetBinaryWithTTL("artifact/blob", []byte("payload"), "text/plain", time.Minute))
+	RequireNoError(t, c.SetBinaryWithTTL(ax7ArtifactBlobKey, []byte("payload"), ax7TextPlain, time.Minute))
 
-	got, found, err := c.GetBinary("artifact/blob")
+	got, found, err := c.GetBinary(ax7ArtifactBlobKey)
 	AssertNoError(t, err)
 	AssertTrue(t, found)
 	AssertEqual(t, []byte("payload"), got)
@@ -303,7 +324,7 @@ func TestCache_Cache_SetBinaryWithTTL_Good(t *T) {
 
 func TestCache_Cache_SetBinaryWithTTL_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setbinaryttl-bad")
-	err := c.SetBinaryWithTTL("artifact/blob", []byte("payload"), "text/plain", -time.Second)
+	err := c.SetBinaryWithTTL(ax7ArtifactBlobKey, []byte("payload"), ax7TextPlain, -time.Second)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "ttl")
@@ -311,9 +332,9 @@ func TestCache_Cache_SetBinaryWithTTL_Bad(t *T) {
 
 func TestCache_Cache_SetBinaryWithTTL_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-setbinaryttl-ugly")
-	RequireNoError(t, c.SetBinaryWithTTL("artifact/blob", []byte("payload"), "text/plain", 0))
+	RequireNoError(t, c.SetBinaryWithTTL(ax7ArtifactBlobKey, []byte("payload"), ax7TextPlain, 0))
 
-	got, found, err := c.GetBinary("artifact/blob")
+	got, found, err := c.GetBinary(ax7ArtifactBlobKey)
 	AssertNoError(t, err)
 	AssertFalse(t, found)
 	AssertNil(t, got)
@@ -321,9 +342,9 @@ func TestCache_Cache_SetBinaryWithTTL_Ugly(t *T) {
 
 func TestCache_Cache_GetBinary_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-getbinary-good")
-	RequireNoError(t, c.SetBinary("artifact/blob", []byte("payload"), "text/plain"))
+	RequireNoError(t, c.SetBinary(ax7ArtifactBlobKey, []byte("payload"), ax7TextPlain))
 
-	got, found, err := c.GetBinary("artifact/blob")
+	got, found, err := c.GetBinary(ax7ArtifactBlobKey)
 	AssertNoError(t, err)
 	AssertTrue(t, found)
 	AssertEqual(t, "payload", string(got))
@@ -342,7 +363,7 @@ func TestCache_Cache_GetBinary_Ugly(t *T) {
 	c, medium := ax7Cache(t, "/tmp/ax7-cache-getbinary-ugly")
 	RequireNoError(t, medium.Write("/tmp/ax7-cache-getbinary-ugly/artifact/blob.json", "{"))
 
-	got, found, err := c.GetBinary("artifact/blob")
+	got, found, err := c.GetBinary(ax7ArtifactBlobKey)
 	AssertError(t, err)
 	AssertFalse(t, found)
 	AssertNil(t, got)
@@ -350,11 +371,11 @@ func TestCache_Cache_GetBinary_Ugly(t *T) {
 
 func TestCache_Cache_Delete_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-delete-good")
-	RequireNoError(t, c.Set("agent/profile", "codex"))
-	RequireNoError(t, c.Delete("agent/profile"))
+	RequireNoError(t, c.Set(ax7AgentProfileKey, "codex"))
+	RequireNoError(t, c.Delete(ax7AgentProfileKey))
 
 	var got string
-	found, err := c.Get("agent/profile", &got)
+	found, err := c.Get(ax7AgentProfileKey, &got)
 	AssertNoError(t, err)
 	AssertFalse(t, found)
 	AssertEqual(t, "", got)
@@ -362,7 +383,7 @@ func TestCache_Cache_Delete_Good(t *T) {
 
 func TestCache_Cache_Delete_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-delete-bad")
-	err := c.Delete("../escape")
+	err := c.Delete(ax7EscapeKey)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "invalid")
@@ -370,32 +391,32 @@ func TestCache_Cache_Delete_Bad(t *T) {
 
 func TestCache_Cache_Delete_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-delete-ugly")
-	err := c.Delete("agent/missing")
+	err := c.Delete(ax7AgentMissingKey)
 
 	AssertNoError(t, err)
-	secondErr := c.Delete("agent/missing")
+	secondErr := c.Delete(ax7AgentMissingKey)
 	AssertNoError(t, secondErr)
-	AssertEqual(t, time.Duration(-1), c.Age("agent/missing"))
+	AssertEqual(t, time.Duration(-1), c.Age(ax7AgentMissingKey))
 }
 
 func TestCache_Cache_DeleteMany_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-deletemany-good")
-	RequireNoError(t, c.Set("agent/one", "one"))
-	RequireNoError(t, c.Set("agent/two", "two"))
+	RequireNoError(t, c.Set(ax7AgentOneKey, "one"))
+	RequireNoError(t, c.Set(ax7AgentTwoKey, "two"))
 
-	err := c.DeleteMany("agent/one", "agent/two")
+	err := c.DeleteMany(ax7AgentOneKey, ax7AgentTwoKey)
 	AssertNoError(t, err)
-	AssertEqual(t, time.Duration(-1), c.Age("agent/one"))
-	AssertEqual(t, time.Duration(-1), c.Age("agent/two"))
+	AssertEqual(t, time.Duration(-1), c.Age(ax7AgentOneKey))
+	AssertEqual(t, time.Duration(-1), c.Age(ax7AgentTwoKey))
 }
 
 func TestCache_Cache_DeleteMany_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-deletemany-bad")
-	RequireNoError(t, c.Set("agent/keep", "value"))
+	RequireNoError(t, c.Set(ax7AgentKeepKey, "value"))
 
-	err := c.DeleteMany("agent/keep", "../escape")
+	err := c.DeleteMany(ax7AgentKeepKey, ax7EscapeKey)
 	AssertError(t, err)
-	AssertGreaterOrEqual(t, c.Age("agent/keep"), time.Duration(0))
+	AssertGreaterOrEqual(t, c.Age(ax7AgentKeepKey), time.Duration(0))
 	AssertContains(t, err.Error(), "invalid")
 }
 
@@ -406,16 +427,16 @@ func TestCache_Cache_DeleteMany_Ugly(t *T) {
 	AssertNoError(t, err)
 	secondErr := c.DeleteMany()
 	AssertNoError(t, secondErr)
-	AssertEqual(t, time.Duration(-1), c.Age("agent/missing"))
+	AssertEqual(t, time.Duration(-1), c.Age(ax7AgentMissingKey))
 }
 
 func TestCache_Cache_Clear_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-clear-good")
-	RequireNoError(t, c.Set("agent/profile", "codex"))
+	RequireNoError(t, c.Set(ax7AgentProfileKey, "codex"))
 	RequireNoError(t, c.Clear())
 
 	var got string
-	found, err := c.Get("agent/profile", &got)
+	found, err := c.Get(ax7AgentProfileKey, &got)
 	AssertNoError(t, err)
 	AssertFalse(t, found)
 	AssertEqual(t, "", got)
@@ -442,16 +463,16 @@ func TestCache_Cache_Clear_Ugly(t *T) {
 
 func TestCache_Cache_Age_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-age-good")
-	RequireNoError(t, c.Set("agent/profile", "codex"))
+	RequireNoError(t, c.Set(ax7AgentProfileKey, "codex"))
 
-	age := c.Age("agent/profile")
+	age := c.Age(ax7AgentProfileKey)
 	AssertGreaterOrEqual(t, age, time.Duration(0))
 	AssertLess(t, age, time.Minute)
 }
 
 func TestCache_Cache_Age_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-age-bad")
-	age := c.Age("agent/missing")
+	age := c.Age(ax7AgentMissingKey)
 
 	AssertEqual(t, time.Duration(-1), age)
 	AssertLess(t, age, time.Duration(0))
@@ -459,7 +480,7 @@ func TestCache_Cache_Age_Bad(t *T) {
 
 func TestCache_Cache_Age_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-age-ugly")
-	age := c.Age("../escape")
+	age := c.Age(ax7EscapeKey)
 
 	AssertEqual(t, time.Duration(-1), age)
 	AssertLess(t, age, time.Duration(0))
@@ -525,7 +546,7 @@ func TestCache_Cache_Invalidate_Ugly(t *T) {
 
 func TestCache_Cache_Scoped_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-scoped-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 
 	AssertNotNil(t, scoped)
 	AssertNoError(t, scoped.Set("profile", "codex"))
@@ -534,7 +555,7 @@ func TestCache_Cache_Scoped_Good(t *T) {
 
 func TestCache_Cache_Scoped_Bad(t *T) {
 	var c *cache.Cache
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 
 	AssertNil(t, scoped)
 	AssertNil(t, c)
@@ -551,17 +572,17 @@ func TestCache_Cache_Scoped_Ugly(t *T) {
 
 func TestCache_Cache_ClearScope_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-cache-clearscope-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("profile", "codex"))
 
-	err := c.ClearScope("https://app.example")
+	err := c.ClearScope(ax7AppOrigin)
 	AssertNoError(t, err)
 	AssertEqual(t, time.Duration(-1), scoped.Age("profile"))
 }
 
 func TestCache_Cache_ClearScope_Bad(t *T) {
 	var c *cache.Cache
-	err := c.ClearScope("https://app.example")
+	err := c.ClearScope(ax7AppOrigin)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "nil")
@@ -579,7 +600,7 @@ func TestCache_Cache_ClearScope_Ugly(t *T) {
 
 func TestCache_ScopedCache_Path_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-path-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 
 	path, err := scoped.Path("profile")
 	AssertNoError(t, err)
@@ -598,9 +619,9 @@ func TestCache_ScopedCache_Path_Bad(t *T) {
 
 func TestCache_ScopedCache_Path_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-path-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 
-	path, err := scoped.Path("../escape")
+	path, err := scoped.Path(ax7EscapeKey)
 	AssertError(t, err)
 	AssertEqual(t, "", path)
 	AssertContains(t, err.Error(), "invalid")
@@ -608,7 +629,7 @@ func TestCache_ScopedCache_Path_Ugly(t *T) {
 
 func TestCache_ScopedCache_Get_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-get-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("profile", "codex"))
 
 	var got string
@@ -620,7 +641,7 @@ func TestCache_ScopedCache_Get_Good(t *T) {
 
 func TestCache_ScopedCache_Get_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-get-bad")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	var got string
 
 	found, err := scoped.Get("missing", &got)
@@ -631,7 +652,7 @@ func TestCache_ScopedCache_Get_Bad(t *T) {
 
 func TestCache_ScopedCache_Get_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-get-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("profile", "codex"))
 
 	found, err := scoped.Get("profile", nil)
@@ -642,7 +663,7 @@ func TestCache_ScopedCache_Get_Ugly(t *T) {
 
 func TestCache_ScopedCache_Set_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-set-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	err := scoped.Set("profile", "codex")
 
 	AssertNoError(t, err)
@@ -652,18 +673,20 @@ func TestCache_ScopedCache_Set_Good(t *T) {
 
 func TestCache_ScopedCache_Set_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-set-bad")
-	scoped := c.Scoped("https://app.example")
-	err := scoped.Set("../escape", "codex")
+	scoped := c.Scoped(ax7AppOrigin)
+	err := scoped.Set(ax7EscapeKey, "codex")
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "invalid")
-	AssertEqual(t, time.Duration(-1), scoped.Age("../escape"))
+	AssertEqual(t, time.Duration(-1), scoped.Age(ax7EscapeKey))
 }
 
 func TestCache_ScopedCache_Set_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-set-ugly")
-	scoped := c.Scoped("https://app.example")
-	err := scoped.Set("handler", map[string]any{"fn": func() {}})
+	scoped := c.Scoped(ax7AppOrigin)
+	err := scoped.Set("handler", map[string]any{"fn": func() {
+		// Intentionally empty: JSON marshaling rejects function values before invocation.
+	}})
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "marshal")
@@ -672,7 +695,7 @@ func TestCache_ScopedCache_Set_Ugly(t *T) {
 
 func TestCache_ScopedCache_SetWithTTL_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setttl-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.SetWithTTL("profile", "codex", time.Minute))
 
 	var got string
@@ -684,7 +707,7 @@ func TestCache_ScopedCache_SetWithTTL_Good(t *T) {
 
 func TestCache_ScopedCache_SetWithTTL_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setttl-bad")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	err := scoped.SetWithTTL("profile", "codex", -time.Second)
 
 	AssertError(t, err)
@@ -694,7 +717,7 @@ func TestCache_ScopedCache_SetWithTTL_Bad(t *T) {
 
 func TestCache_ScopedCache_SetWithTTL_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setttl-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.SetWithTTL("profile", "codex", 0))
 
 	var got string
@@ -706,8 +729,8 @@ func TestCache_ScopedCache_SetWithTTL_Ugly(t *T) {
 
 func TestCache_ScopedCache_SetBinary_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setbinary-good")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.SetBinary("artifact", []byte("payload"), "text/plain"))
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.SetBinary("artifact", []byte("payload"), ax7TextPlain))
 
 	got, found, err := scoped.GetBinary("artifact")
 	AssertNoError(t, err)
@@ -717,17 +740,17 @@ func TestCache_ScopedCache_SetBinary_Good(t *T) {
 
 func TestCache_ScopedCache_SetBinary_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setbinary-bad")
-	scoped := c.Scoped("https://app.example")
-	err := scoped.SetBinary("../escape", []byte("payload"), "text/plain")
+	scoped := c.Scoped(ax7AppOrigin)
+	err := scoped.SetBinary(ax7EscapeKey, []byte("payload"), ax7TextPlain)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "invalid")
-	AssertEqual(t, time.Duration(-1), scoped.Age("../escape"))
+	AssertEqual(t, time.Duration(-1), scoped.Age(ax7EscapeKey))
 }
 
 func TestCache_ScopedCache_SetBinary_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setbinary-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.SetBinary("artifact", []byte{}, ""))
 
 	got, found, err := scoped.GetBinary("artifact")
@@ -738,8 +761,8 @@ func TestCache_ScopedCache_SetBinary_Ugly(t *T) {
 
 func TestCache_ScopedCache_SetBinaryWithTTL_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setbinaryttl-good")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.SetBinaryWithTTL("artifact", []byte("payload"), "text/plain", time.Minute))
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.SetBinaryWithTTL("artifact", []byte("payload"), ax7TextPlain, time.Minute))
 
 	got, found, err := scoped.GetBinary("artifact")
 	AssertNoError(t, err)
@@ -749,8 +772,8 @@ func TestCache_ScopedCache_SetBinaryWithTTL_Good(t *T) {
 
 func TestCache_ScopedCache_SetBinaryWithTTL_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setbinaryttl-bad")
-	scoped := c.Scoped("https://app.example")
-	err := scoped.SetBinaryWithTTL("artifact", []byte("payload"), "text/plain", -time.Second)
+	scoped := c.Scoped(ax7AppOrigin)
+	err := scoped.SetBinaryWithTTL("artifact", []byte("payload"), ax7TextPlain, -time.Second)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "ttl")
@@ -759,8 +782,8 @@ func TestCache_ScopedCache_SetBinaryWithTTL_Bad(t *T) {
 
 func TestCache_ScopedCache_SetBinaryWithTTL_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-setbinaryttl-ugly")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.SetBinaryWithTTL("artifact", []byte("payload"), "text/plain", 0))
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.SetBinaryWithTTL("artifact", []byte("payload"), ax7TextPlain, 0))
 
 	got, found, err := scoped.GetBinary("artifact")
 	AssertNoError(t, err)
@@ -770,8 +793,8 @@ func TestCache_ScopedCache_SetBinaryWithTTL_Ugly(t *T) {
 
 func TestCache_ScopedCache_GetBinary_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-getbinary-good")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.SetBinary("artifact", []byte("payload"), "text/plain"))
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.SetBinary("artifact", []byte("payload"), ax7TextPlain))
 
 	got, found, err := scoped.GetBinary("artifact")
 	AssertNoError(t, err)
@@ -781,7 +804,7 @@ func TestCache_ScopedCache_GetBinary_Good(t *T) {
 
 func TestCache_ScopedCache_GetBinary_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-getbinary-bad")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 
 	got, found, err := scoped.GetBinary("missing")
 	AssertNoError(t, err)
@@ -791,9 +814,9 @@ func TestCache_ScopedCache_GetBinary_Bad(t *T) {
 
 func TestCache_ScopedCache_GetBinary_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-getbinary-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 
-	got, found, err := scoped.GetBinary("../escape")
+	got, found, err := scoped.GetBinary(ax7EscapeKey)
 	AssertError(t, err)
 	AssertFalse(t, found)
 	AssertNil(t, got)
@@ -801,7 +824,7 @@ func TestCache_ScopedCache_GetBinary_Ugly(t *T) {
 
 func TestCache_ScopedCache_Delete_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-delete-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("profile", "codex"))
 
 	err := scoped.Delete("profile")
@@ -811,17 +834,17 @@ func TestCache_ScopedCache_Delete_Good(t *T) {
 
 func TestCache_ScopedCache_Delete_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-delete-bad")
-	scoped := c.Scoped("https://app.example")
-	err := scoped.Delete("../escape")
+	scoped := c.Scoped(ax7AppOrigin)
+	err := scoped.Delete(ax7EscapeKey)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "invalid")
-	AssertEqual(t, time.Duration(-1), scoped.Age("../escape"))
+	AssertEqual(t, time.Duration(-1), scoped.Age(ax7EscapeKey))
 }
 
 func TestCache_ScopedCache_Delete_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-delete-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	err := scoped.Delete("missing")
 
 	AssertNoError(t, err)
@@ -832,7 +855,7 @@ func TestCache_ScopedCache_Delete_Ugly(t *T) {
 
 func TestCache_ScopedCache_DeleteMany_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-deletemany-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("one", "1"))
 	RequireNoError(t, scoped.Set("two", "2"))
 
@@ -844,10 +867,10 @@ func TestCache_ScopedCache_DeleteMany_Good(t *T) {
 
 func TestCache_ScopedCache_DeleteMany_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-deletemany-bad")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("keep", "value"))
 
-	err := scoped.DeleteMany("keep", "../escape")
+	err := scoped.DeleteMany("keep", ax7EscapeKey)
 	AssertError(t, err)
 	AssertGreaterOrEqual(t, scoped.Age("keep"), time.Duration(0))
 	AssertContains(t, err.Error(), "invalid")
@@ -855,7 +878,7 @@ func TestCache_ScopedCache_DeleteMany_Bad(t *T) {
 
 func TestCache_ScopedCache_DeleteMany_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-deletemany-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	err := scoped.DeleteMany()
 
 	AssertNoError(t, err)
@@ -866,7 +889,7 @@ func TestCache_ScopedCache_DeleteMany_Ugly(t *T) {
 
 func TestCache_ScopedCache_Clear_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-clear-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("profile", "codex"))
 	RequireNoError(t, c.Set("profile", "root"))
 
@@ -886,7 +909,7 @@ func TestCache_ScopedCache_Clear_Bad(t *T) {
 
 func TestCache_ScopedCache_Clear_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-clear-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	err := scoped.Clear()
 
 	AssertNoError(t, err)
@@ -897,18 +920,18 @@ func TestCache_ScopedCache_Clear_Ugly(t *T) {
 
 func TestCache_ScopedCache_ClearScope_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-clearscope-good")
-	scoped := c.Scoped("https://app.example")
-	admin := scoped.Scoped("https://admin.example")
+	scoped := c.Scoped(ax7AppOrigin)
+	admin := scoped.Scoped(ax7AdminOrigin)
 	RequireNoError(t, admin.Set("profile", "admin"))
 
-	err := scoped.ClearScope("https://admin.example")
+	err := scoped.ClearScope(ax7AdminOrigin)
 	AssertNoError(t, err)
 	AssertEqual(t, time.Duration(-1), admin.Age("profile"))
 }
 
 func TestCache_ScopedCache_ClearScope_Bad(t *T) {
 	var scoped *cache.ScopedCache
-	err := scoped.ClearScope("https://admin.example")
+	err := scoped.ClearScope(ax7AdminOrigin)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "nil")
@@ -916,7 +939,7 @@ func TestCache_ScopedCache_ClearScope_Bad(t *T) {
 
 func TestCache_ScopedCache_ClearScope_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-clearscope-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	err := scoped.ClearScope("")
 
 	AssertNoError(t, err)
@@ -927,9 +950,9 @@ func TestCache_ScopedCache_ClearScope_Ugly(t *T) {
 
 func TestCache_ScopedCache_OnInvalidate_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-oninvalidate-good")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.Set("prefs/theme", "dark"))
-	scoped.OnInvalidate("flush", func(string) []string { return []string{"prefs/*"} })
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.Set(ax7PrefsThemeKey, "dark"))
+	scoped.OnInvalidate("flush", func(string) []string { return []string{ax7PrefsPattern} })
 
 	deleted, err := c.Invalidate("flush")
 	AssertNoError(t, err)
@@ -938,8 +961,8 @@ func TestCache_ScopedCache_OnInvalidate_Good(t *T) {
 
 func TestCache_ScopedCache_OnInvalidate_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-oninvalidate-bad")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.Set("prefs/theme", "dark"))
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.Set(ax7PrefsThemeKey, "dark"))
 	scoped.OnInvalidate("flush", nil)
 
 	deleted, err := c.Invalidate("flush")
@@ -950,16 +973,16 @@ func TestCache_ScopedCache_OnInvalidate_Bad(t *T) {
 func TestCache_ScopedCache_OnInvalidate_Ugly(t *T) {
 	var scoped *cache.ScopedCache
 	AssertNotPanics(t, func() {
-		scoped.OnInvalidate("flush", func(string) []string { return []string{"prefs/*"} })
+		scoped.OnInvalidate("flush", func(string) []string { return []string{ax7PrefsPattern} })
 	})
 	AssertNil(t, scoped)
 }
 
 func TestCache_ScopedCache_Invalidate_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-invalidate-good")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.Set("prefs/theme", "dark"))
-	scoped.OnInvalidate("flush", func(string) []string { return []string{"prefs/*"} })
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.Set(ax7PrefsThemeKey, "dark"))
+	scoped.OnInvalidate("flush", func(string) []string { return []string{ax7PrefsPattern} })
 
 	deleted, err := scoped.Invalidate("flush")
 	AssertNoError(t, err)
@@ -968,8 +991,8 @@ func TestCache_ScopedCache_Invalidate_Good(t *T) {
 
 func TestCache_ScopedCache_Invalidate_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-invalidate-bad")
-	scoped := c.Scoped("https://app.example")
-	RequireNoError(t, scoped.Set("prefs/theme", "dark"))
+	scoped := c.Scoped(ax7AppOrigin)
+	RequireNoError(t, scoped.Set(ax7PrefsThemeKey, "dark"))
 
 	deleted, err := scoped.Invalidate("missing")
 	AssertNoError(t, err)
@@ -987,7 +1010,7 @@ func TestCache_ScopedCache_Invalidate_Ugly(t *T) {
 
 func TestCache_ScopedCache_Age_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-age-good")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	RequireNoError(t, scoped.Set("profile", "codex"))
 
 	age := scoped.Age("profile")
@@ -997,7 +1020,7 @@ func TestCache_ScopedCache_Age_Good(t *T) {
 
 func TestCache_ScopedCache_Age_Bad(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-age-bad")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	age := scoped.Age("missing")
 
 	AssertEqual(t, time.Duration(-1), age)
@@ -1014,8 +1037,8 @@ func TestCache_ScopedCache_Age_Ugly(t *T) {
 
 func TestCache_ScopedCache_Scoped_Good(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-scoped-good")
-	scoped := c.Scoped("https://app.example")
-	admin := scoped.Scoped("https://admin.example")
+	scoped := c.Scoped(ax7AppOrigin)
+	admin := scoped.Scoped(ax7AdminOrigin)
 
 	AssertNotNil(t, admin)
 	AssertNoError(t, admin.Set("profile", "admin"))
@@ -1024,7 +1047,7 @@ func TestCache_ScopedCache_Scoped_Good(t *T) {
 
 func TestCache_ScopedCache_Scoped_Bad(t *T) {
 	var scoped *cache.ScopedCache
-	admin := scoped.Scoped("https://admin.example")
+	admin := scoped.Scoped(ax7AdminOrigin)
 
 	AssertNil(t, admin)
 	AssertNil(t, scoped)
@@ -1032,7 +1055,7 @@ func TestCache_ScopedCache_Scoped_Bad(t *T) {
 
 func TestCache_ScopedCache_Scoped_Ugly(t *T) {
 	c, _ := ax7Cache(t, "/tmp/ax7-scoped-scoped-ugly")
-	scoped := c.Scoped("https://app.example")
+	scoped := c.Scoped(ax7AppOrigin)
 	empty := scoped.Scoped("")
 
 	AssertNotNil(t, empty)
@@ -1053,7 +1076,7 @@ func TestCache_CacheStorage_Open_Good(t *T) {
 
 func TestCache_CacheStorage_Open_Bad(t *T) {
 	storage, _ := ax7Storage(t, "/tmp/ax7-storage-open-bad")
-	httpCache, err := storage.Open("../escape")
+	httpCache, err := storage.Open(ax7EscapeKey)
 
 	AssertError(t, err)
 	AssertNil(t, httpCache)
@@ -1083,7 +1106,7 @@ func TestCache_CacheStorage_Delete_Good(t *T) {
 
 func TestCache_CacheStorage_Delete_Bad(t *T) {
 	storage, _ := ax7Storage(t, "/tmp/ax7-storage-delete-bad")
-	err := storage.Delete("../escape")
+	err := storage.Delete(ax7EscapeKey)
 
 	AssertError(t, err)
 	AssertContains(t, err.Error(), "invalid")
@@ -1115,12 +1138,12 @@ func TestCache_CacheStorage_Keys_Bad(t *T) {
 	medium := newScriptedMedium()
 	storage, err := cache.NewCacheStorage(medium, "/tmp/ax7-storage-keys-bad")
 	RequireNoError(t, err)
-	medium.listErr["/tmp/ax7-storage-keys-bad"] = NewError("list failed")
+	medium.listErr["/tmp/ax7-storage-keys-bad"] = NewError(ax7ListFailed)
 
 	keys, err := storage.Keys()
 	AssertError(t, err)
 	AssertNil(t, keys)
-	AssertContains(t, err.Error(), "list failed")
+	AssertContains(t, err.Error(), ax7ListFailed)
 }
 
 func TestCache_CacheStorage_Keys_Ugly(t *T) {
@@ -1166,7 +1189,7 @@ func TestCache_CacheStorage_Close_Ugly(t *T) {
 
 func TestCache_HTTPCache_Match_Good(t *T) {
 	httpCache, _ := ax7HTTPCache(t, "/tmp/ax7-http-match-good", "api")
-	req := ax7Request("GET", "https://example.com/data")
+	req := ax7Request("GET", ax7HTTPDataURL)
 	RequireNoError(t, httpCache.Put(req, ax7Response(200), []byte("body")))
 
 	resp, err := httpCache.Match(req)
@@ -1176,13 +1199,13 @@ func TestCache_HTTPCache_Match_Good(t *T) {
 }
 
 func TestCache_HTTPCache_Match_Ugly(t *T) {
-	httpCache, medium := ax7HTTPCache(t, "/tmp/ax7-http-match-ugly", "api")
+	httpCache, medium := ax7HTTPCache(t, ax7HTTPMatchUglyDir, "api")
 	req := ax7Request("GET", "https://example.com/legacy")
 	key := legacyHTTPCacheStorageKey(req)
 	resp := ax7Response(203)
 	resp.BodyPath = JoinPath("responses", key+".bin")
-	RequireNoError(t, medium.Write(JoinPath("/tmp/ax7-http-match-ugly", "api", "responses", key+".json"), JSONMarshalString(resp)))
-	RequireNoError(t, medium.Write(JoinPath("/tmp/ax7-http-match-ugly", "api", "responses", key+".bin"), "legacy"))
+	RequireNoError(t, medium.Write(JoinPath(ax7HTTPMatchUglyDir, "api", "responses", key+".json"), JSONMarshalString(resp)))
+	RequireNoError(t, medium.Write(JoinPath(ax7HTTPMatchUglyDir, "api", "responses", key+".bin"), "legacy"))
 
 	got, err := httpCache.Match(req)
 	AssertNoError(t, err)
@@ -1191,7 +1214,7 @@ func TestCache_HTTPCache_Match_Ugly(t *T) {
 
 func TestCache_HTTPCache_Put_Good(t *T) {
 	httpCache, _ := ax7HTTPCache(t, "/tmp/ax7-http-put-good", "api")
-	req := ax7Request("POST", "https://example.com/data")
+	req := ax7Request("POST", ax7HTTPDataURL)
 	err := httpCache.Put(req, ax7Response(201), []byte("created"))
 
 	AssertNoError(t, err)
@@ -1202,7 +1225,7 @@ func TestCache_HTTPCache_Put_Good(t *T) {
 
 func TestCache_HTTPCache_ReadBody_Good(t *T) {
 	httpCache, _ := ax7HTTPCache(t, "/tmp/ax7-http-readbody-good", "api")
-	req := ax7Request("GET", "https://example.com/data")
+	req := ax7Request("GET", ax7HTTPDataURL)
 	RequireNoError(t, httpCache.Put(req, ax7Response(200), []byte("body")))
 	resp, err := httpCache.Match(req)
 	RequireNoError(t, err)
@@ -1233,7 +1256,7 @@ func TestCache_HTTPCache_ReadBody_Ugly(t *T) {
 
 func TestCache_HTTPCache_Delete_Good(t *T) {
 	httpCache, _ := ax7HTTPCache(t, "/tmp/ax7-http-delete-good", "api")
-	req := ax7Request("GET", "https://example.com/data")
+	req := ax7Request("GET", ax7HTTPDataURL)
 	RequireNoError(t, httpCache.Put(req, ax7Response(200), []byte("body")))
 
 	err := httpCache.Delete(req)
@@ -1268,12 +1291,12 @@ func TestCache_HTTPCache_Keys_Bad(t *T) {
 	RequireNoError(t, err)
 	httpCache, err := storage.Open("api")
 	RequireNoError(t, err)
-	medium.listErr["/tmp/ax7-http-keys-bad/api/responses"] = NewError("list failed")
+	medium.listErr["/tmp/ax7-http-keys-bad/api/responses"] = NewError(ax7ListFailed)
 
 	urls, err := httpCache.Keys()
 	AssertError(t, err)
 	AssertNil(t, urls)
-	AssertContains(t, err.Error(), "list failed")
+	AssertContains(t, err.Error(), ax7ListFailed)
 }
 
 func TestCache_HTTPCache_Keys_Ugly(t *T) {
