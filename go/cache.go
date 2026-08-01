@@ -1125,13 +1125,10 @@ func rawBase64URLDecode(encoded string) core.Result {
 	out := make([]byte, 0, len(encoded)*3/4)
 	for i := 0; i < len(encoded); {
 		remaining := len(encoded) - i
-		chunkLen := 4
-		if remaining < chunkLen {
-			chunkLen = remaining
-		}
+		chunkLen := min(remaining, 4)
 
 		var values [4]byte
-		for j := 0; j < chunkLen; j++ {
+		for j := range chunkLen {
 			value := rawBase64URLDecodeValue(encoded[i+j])
 			if value < 0 {
 				return failure(opCacheRawBase64URLDecode, "invalid raw URL base64 character", nil)
@@ -1453,7 +1450,7 @@ func isHTTPToken(s string) bool {
 	if s == "" {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		switch c := s[i]; {
 		case c >= 'a' && c <= 'z':
 		case c >= 'A' && c <= 'Z':
@@ -1746,7 +1743,7 @@ func hasPathDangerousBytes(s string) bool {
 }
 
 func hasDangerousBytes(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] < 0x20 || s[i] == 0x7f {
 			return true
 		}
