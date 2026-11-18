@@ -1,8 +1,8 @@
-module dappco.re/go/cache
+module github.com/dappcore/go-cache/go
 
 go 1.26.0
 
 require (
-	dappco.re/go v0.12.0
-	dappco.re/go/io v0.15.3
+	github.com/dappcore/go v0.13.0
+	github.com/dappcore/go-io/go v0.16.0
 )

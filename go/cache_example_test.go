@@ -5,8 +5,8 @@ package cache_test
 import (
 	"time"
 
-	"dappco.re/go/cache"
-	coreio "dappco.re/go/io"
+	"github.com/dappcore/go-cache/go"
+	coreio "github.com/dappcore/go-io/go"
 )
 
 func exampleCache() *cache.Cache {
