@@ -6,9 +6,9 @@ import (
 	"io/fs"
 	"time"
 
-	. "dappco.re/go"
-	"dappco.re/go/cache"
-	coreio "dappco.re/go/io"
+	. "github.com/dappcore/go"
+	"github.com/dappcore/go-cache/go"
+	coreio "github.com/dappcore/go-io/go"
 )
 
 const (

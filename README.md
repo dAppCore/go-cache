@@ -1,7 +1,7 @@
 # go-cache
 
-`dappco.re/go/cache` provides a storage-agnostic cache backed by
-`dappco.re/go/io` media. It stores JSON entries, binary sidecars, scoped caches,
+`github.com/dappcore/go-cache/go` provides a storage-agnostic cache backed by
+`github.com/dappcore/go-io/go` media. It stores JSON entries, binary sidecars, scoped caches,
 and request/response metadata for HTTP cache workflows.
 
 ## Development

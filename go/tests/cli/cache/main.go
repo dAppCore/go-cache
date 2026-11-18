@@ -6,9 +6,9 @@
 package main
 
 import (
-	core "dappco.re/go"
-	"dappco.re/go/cache"
-	coreio "dappco.re/go/io"
+	core "github.com/dappcore/go"
+	"github.com/dappcore/go-cache/go"
+	coreio "github.com/dappcore/go-io/go"
 )
 
 func main() {

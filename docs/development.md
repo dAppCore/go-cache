@@ -168,8 +168,8 @@ the [architecture](architecture.md) document for the full method mapping.
 
 ```go
 import (
-    "dappco.re/go/cache"
-    "dappco.re/go/core/io/store"
+    "github.com/dappcore/go-cache/go"
+    "github.com/dappcore/go-io/go/store"
     "time"
 )
 

@@ -8,7 +8,7 @@ description: File-based caching with TTL expiry, storage-agnostic via the go-io 
 `go-cache` is a lightweight, storage-agnostic caching library for Go. It stores
 JSON-serialised entries with automatic TTL expiry and path-traversal protection.
 
-**Module path:** `dappco.re/go/cache`
+**Module path:** `github.com/dappcore/go-cache/go`
 
 **Licence:** EUPL-1.2
 
@@ -20,7 +20,7 @@ import (
     "fmt"
     "time"
 
-    "dappco.re/go/cache"
+    "github.com/dappcore/go-cache/go"
 )
 
 func main() {
@@ -68,7 +68,7 @@ func main() {
 
 | Module                        | Version | Role                                       |
 |-------------------------------|---------|---------------------------------------------|
-| `dappco.re/go/core/io`   | v0.4.1  | Storage abstraction (`Medium` interface)    |
+| `github.com/dappcore/go-io/go`   | v0.4.1  | Storage abstraction (`Medium` interface)    |
 
 There are no other runtime dependencies. The test suite uses the standard
 library only (plus the `MockMedium` from `go-io`).

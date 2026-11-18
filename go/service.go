@@ -12,8 +12,8 @@ import (
 	"context"
 	"time"
 
-	core "dappco.re/go"
-	coreio "dappco.re/go/io"
+	core "github.com/dappcore/go"
+	coreio "github.com/dappcore/go-io/go"
 )
 
 // CacheConfig is the typed-options struct for the cache service. Empty
